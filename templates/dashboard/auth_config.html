@@ -10,7 +10,7 @@
     })();
 
     // Expose global Razorpay checkout handlers
-    window.openRazorpayCheckout = function(subscriptionData) {
+    window.openRazorpayCheckout = function (subscriptionData) {
         if (!subscriptionData || !subscriptionData.subscription_id || !subscriptionData.razorpay_key_id) {
             alert('Payment data missing.');
             return;
@@ -23,6 +23,23 @@
             theme: { color: '#8b5cf6' },
             handler: function (response) {
                 window.verifyPayment(response);
+            },
+            modal: {
+                ondismiss: function () {
+                    // Handle abandoned payment
+                    console.log('Payment modal closed by user');
+                    if (subscriptionData.subscription_id) {
+                        makeAuthenticatedRequest('/api/razorpay/subscription/abandon', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ subscription_id: subscriptionData.subscription_id })
+                        }).then(r => r.json()).then(d => {
+                            console.log('Abandonment logged:', d);
+                            alert('Payment was cancelled. Your subscription was not upgraded.');
+                            if (typeof window.refreshSubscriptionData === 'function') window.refreshSubscriptionData();
+                        }).catch(e => console.error('Failed to log abandonment', e));
+                    }
+                }
             }
         };
         if (typeof Razorpay !== 'undefined') {
@@ -33,7 +50,7 @@
         }
     };
 
-    window.verifyPayment = async function(resp) {
+    window.verifyPayment = async function (resp) {
         try {
             const r = await makeAuthenticatedRequest('/api/razorpay/subscription/verify', {
                 method: 'POST',
@@ -63,7 +80,7 @@
     // Check for new JWT tokens, clear old format if exists
     const accessToken = localStorage.getItem('access_token');
     const userData = localStorage.getItem('user_data');
-    
+
     if (!accessToken || !userData) {
         // Migrate from old auth format if needed
         const oldAuth = localStorage.getItem('aiProjectControlTowerAuth_v2');
@@ -247,7 +264,7 @@
         localStorage.removeItem('aiProjectControlTowerAuth_v2');
         sessionStorage.removeItem('trial_banner_dismissed');
         sessionStorage.removeItem('trial_banner_dismissed_at');
-        
+
         // Show timeout message
         const root = document.getElementById('root');
         if (root) {
@@ -271,7 +288,7 @@
                 </div>
             `;
         }
-        
+
         // Redirect after 2 seconds
         setTimeout(() => {
             window.location.href = '/';
@@ -285,7 +302,7 @@
             handleSessionTimeout();
             return false;
         }
-        
+
         try {
             const response = await fetch('/api/refresh', {
                 method: 'POST',
@@ -294,7 +311,7 @@
                 },
                 body: JSON.stringify({ refresh_token: refreshToken })
             });
-            
+
             if (response.ok) {
                 const data = await response.json();
                 if (data && data.access_token) {
@@ -342,7 +359,7 @@
         }
 
         let accessToken = localStorage.getItem('access_token');
-        
+
         // Check if token is expired before making request
         if (isTokenExpired(accessToken)) {
             const newToken = await refreshAccessToken();
@@ -351,7 +368,7 @@
             }
             accessToken = localStorage.getItem('access_token');
         }
-        
+
         // Handle FormData specially - only add Authorization, don't touch Content-Type
         if (options.body instanceof FormData) {
             options = {
@@ -369,12 +386,12 @@
             // Add Authorization header
             options.headers['Authorization'] = 'Bearer ' + accessToken;
         }
-        
+
         // Make the request
         // Relative URL is resolved by browser against window.location.origin
         // Example: '/api/upload' becomes 'http://127.0.0.1:5000/api/upload' if page is served from port 5000
         let response = await fetch(url, options);
-        
+
         // If 401, try to refresh token and retry once
         if (response.status === 401) {
             const refreshSuccess = await refreshAccessToken();
@@ -393,7 +410,7 @@
                     } else {
                         options.headers['Authorization'] = 'Bearer ' + newAccessToken;
                     }
-                    
+
                     response = await fetch(url, options);
                 } else {
                     throw new Error('Session expired');
@@ -402,7 +419,7 @@
                 throw new Error('Session expired');
             }
         }
-        
+
         // Plan limit error handling and usage refresh
         if (response.status === 403) {
             try {
@@ -416,18 +433,18 @@
                     const message = (data.message || 'Plan limit reached.') + suggested;
                     const action = isAdmin
                         ? { label: 'Upgrade Now', onClick: () => { window.location.href = upgradeUrl; } }
-                        : { label: 'Contact Admin', onClick: () => { try { alert('Please contact your Organization Admin to upgrade your plan.'); } catch (e) {} } };
+                        : { label: 'Contact Admin', onClick: () => { try { alert('Please contact your Organization Admin to upgrade your plan.'); } catch (e) { } } };
                     if (typeof window.showNotification === 'function') {
                         window.showNotification({ message, type: 'error', action, duration: 12000 });
                     }
                     if (typeof window.refreshUsageStats === 'function') {
                         window.refreshUsageStats();
                     }
-                    try { window.dispatchEvent(new CustomEvent('planLimitExceeded', { detail: data })); } catch (e) {}
+                    try { window.dispatchEvent(new CustomEvent('planLimitExceeded', { detail: data })); } catch (e) { }
                 }
-            } catch (e) {}
+            } catch (e) { }
         }
-        
+
         return response;
     };
 </script>

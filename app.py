@@ -2184,7 +2184,7 @@ def resolve_tenant():
                     
                     # Set subscription active flag with enhanced status checks
                     ALLOWED_SUBSCRIPTION_STATUSES = ['active', 'trial', 'authenticated', 'created', 'paused', 'pending_cancellation']
-                    BLOCKED_SUBSCRIPTION_STATUSES = ['halted', 'cancelled', 'expired']
+                    BLOCKED_SUBSCRIPTION_STATUSES = ['halted', 'cancelled', 'expired', 'abandoned']
                     if subscription_status in ALLOWED_SUBSCRIPTION_STATUSES:
                         g.subscription_active = True
                     elif subscription_status in BLOCKED_SUBSCRIPTION_STATUSES:
@@ -5859,7 +5859,20 @@ def razorpay_webhooks():
 			execute_primary_query("UPDATE subscriptions SET status = 'authenticated' WHERE razorpay_subscription_id = ?", (subscription_id,))
 		elif event_type == 'subscription.activated':
 			start_at = sub_entity.get('start_at')
-			execute_primary_query("UPDATE subscriptions SET status = 'active', start_date = ? WHERE razorpay_subscription_id = ?", (datetime.fromtimestamp(start_at).strftime('%Y-%m-%d') if start_at else None, subscription_id))
+			# Atomic Swap: Activate new plan AND cancel any other 'active' or 'trial' plans for this org
+			try:
+				# 1. Activate the new subscription
+				execute_primary_query("UPDATE subscriptions SET status = 'active', start_date = ? WHERE razorpay_subscription_id = ?", (datetime.fromtimestamp(start_at).strftime('%Y-%m-%d') if start_at else None, subscription_id))
+				
+				# 2. Cancel any OTHER active/trial subscriptions for this org to prevent duplicates
+				# We use the org_id we resolved earlier
+				execute_primary_query(
+					"UPDATE subscriptions SET status = 'cancelled', end_date = ? WHERE org_id = ? AND razorpay_subscription_id != ? AND status IN ('active', 'trial', 'authenticated')",
+					(datetime.now().strftime('%Y-%m-%d'), org_id, subscription_id)
+				)
+				print(f"[WEBHOOK] Atomic swap completed for org {org_id}. New subscription {subscription_id} active.")
+			except Exception as e:
+				print(f"[WEBHOOK] Error during atomic swap: {e}")
 		elif event_type == 'subscription.charged':
 			payment_id = pay_entity.get('id')
 			amount = (pay_entity.get('amount', 0) or 0) / 100.0
@@ -5925,8 +5938,24 @@ def get_organization_subscription():
 		if not org_id:
 			return jsonify({"status": "error", "message": "Organization context missing"}), 400
 
+		# Prioritize Active/Trial/Authenticated subscriptions over Created/Abandoned
+		# This ensures we show the actual active plan even if a newer "created" (abandoned) attempt exists
 		row = execute_primary_query(
-			"SELECT id, org_id, plan_type, razorpay_subscription_id, status, start_date, end_date, billing_cycle FROM subscriptions WHERE org_id = ? ORDER BY id DESC LIMIT 1",
+			"""
+			SELECT id, org_id, plan_type, razorpay_subscription_id, status, start_date, end_date, billing_cycle 
+			FROM subscriptions 
+			WHERE org_id = ? 
+			ORDER BY 
+				CASE 
+					WHEN status IN ('active', 'trial', 'authenticated') THEN 1 
+					WHEN status = 'paused' THEN 2
+					WHEN status = 'past_due' THEN 3
+					WHEN status = 'created' THEN 4
+					ELSE 5 
+				END ASC,
+				id DESC 
+			LIMIT 1
+			""",
 			(org_id,),
 			fetch_one=True
 		)
@@ -6138,7 +6167,25 @@ def upgrade_subscription():
 				pass
 			return jsonify({"status": "error", "message": "Recent payment request exists. Please try again shortly.", "request_id": idempotency_key}), 409
 
-	current = execute_primary_query("SELECT id, plan_type, status, razorpay_subscription_id, billing_cycle FROM subscriptions WHERE org_id = ? ORDER BY id DESC LIMIT 1", (org_id,), fetch_one=True)
+	# Prioritize Active/Trial/Authenticated subscriptions for upgrade comparison
+	current = execute_primary_query(
+		"""
+		SELECT id, plan_type, status, razorpay_subscription_id, billing_cycle 
+		FROM subscriptions 
+		WHERE org_id = ? 
+		ORDER BY 
+			CASE 
+				WHEN status IN ('active', 'trial', 'authenticated') THEN 1 
+				WHEN status = 'paused' THEN 2
+				WHEN status = 'past_due' THEN 3
+				ELSE 4 
+			END ASC,
+			id DESC 
+		LIMIT 1
+		""", 
+		(org_id,), 
+		fetch_one=True
+	)
 	if not current:
 		return jsonify({"status": "error", "message": "No active subscription to upgrade"}), 404
 	old_id, old_plan, old_status, old_rz_sub, old_cycle = current
@@ -6333,10 +6380,7 @@ def upgrade_subscription():
 		# DB update atomically in Primary DB
 		start_date = datetime.now().strftime('%Y-%m-%d')
 		run_primary_transaction([
-			(
-				"UPDATE subscriptions SET status = 'cancelled', end_date = ? WHERE id = ?",
-				(datetime.now().strftime('%Y-%m-%d'), old_id)
-			),
+			# REMOVED: Premature cancellation of old plan. Old plan remains active until new one is activated via webhook.
 			(
 				"INSERT INTO subscriptions (org_id, plan_type, razorpay_subscription_id, status, start_date, billing_cycle) VALUES (?, ?, ?, 'created', ?, ?)",
 				(org_id, new_plan_type, new_sub_id, start_date, billing_cycle)
@@ -6503,6 +6547,108 @@ def cancel_subscription():
 	except Exception:
 		pass
 	return jsonify({"status": "success", "message": message, "cancelled_at": datetime.now().strftime('%Y-%m-%d'), "access_until": access_until})
+
+
+@app.route('/api/razorpay/subscription/abandon', methods=['POST'])
+@role_required([ROLE_SUPER_ADMIN, ROLE_ORG_ADMIN, ROLE_ORG_USER])
+def abandon_subscription():
+    """
+    Handle abandoned subscription attempts (e.g. user closed modal).
+    """
+    data = request.get_json(silent=True) or {}
+    subscription_id = data.get('subscription_id')
+    
+    if not subscription_id:
+        return jsonify({"status": "error", "message": "Subscription ID required"}), 400
+        
+    org_id = getattr(g, 'org_id', None)
+    
+    try:
+        # Define transaction helper locally
+        primary_conn = None
+        primary_cursor = None
+
+        def close_primary_conn():
+            nonlocal primary_conn
+            if primary_conn:
+                try:
+                    primary_conn.close()
+                except Exception:
+                    pass
+                primary_conn = None
+
+        def run_primary_transaction(statements):
+            nonlocal primary_conn, primary_cursor
+            if primary_conn is None:
+                primary_conn = get_primary_db_connection()
+                primary_cursor = primary_conn.cursor()
+            try:
+                if DB_TYPE.lower() == 'mysql':
+                    primary_cursor.execute("START TRANSACTION")
+                else:
+                    primary_cursor.execute("BEGIN IMMEDIATE")
+                for sql, params in statements:
+                    primary_cursor.execute(convert_query_placeholders(sql, DB_TYPE), params)
+                primary_conn.commit()
+            except Exception:
+                if primary_conn:
+                    primary_conn.rollback()
+                raise
+
+        # Find the subscription
+        row = execute_primary_query(
+            "SELECT id, status, plan_type FROM subscriptions WHERE razorpay_subscription_id = ? AND org_id = ?", 
+            (subscription_id, org_id), 
+            fetch_one=True
+        )
+        
+        if not row:
+            close_primary_conn()
+            return jsonify({"status": "error", "message": "Subscription not found"}), 404
+            
+        sub_id, status, plan_type = row
+        
+        # Only abandon if it's in 'created' state or 'authenticated' (but not active)
+        if status in ['created', 'pending']:
+            try:
+                run_primary_transaction([
+                    (
+                        "UPDATE subscriptions SET status = 'abandoned' WHERE id = ?",
+                        (sub_id,)
+                    ),
+                    (
+                        "UPDATE payment_requests SET status = 'abandoned', updated_at = CURRENT_TIMESTAMP WHERE subscription_id = ?",
+                        (subscription_id,)
+                    )
+                ])
+                
+                # Log it
+                try:
+                    execute_primary_query(
+                        "INSERT INTO audit_logs (org_id, user_id, action, details) VALUES (?, ?, ?, ?)",
+                        (org_id, getattr(g, 'user_id', None), 'payment_abandoned', json.dumps({
+                            "subscription_id": subscription_id,
+                            "plan_type": plan_type
+                        }))
+                    )
+                except Exception:
+                    pass
+            finally:
+                close_primary_conn()
+                
+            return jsonify({"status": "success", "message": "Subscription abandoned"})
+            
+        elif status == 'active':
+             close_primary_conn()
+             return jsonify({"status": "error", "message": "Cannot abandon active subscription"}), 400
+        else:
+             # Already in some other state, just ignore
+             close_primary_conn()
+             return jsonify({"status": "success", "message": "Subscription already in terminal state"})
+
+    except Exception as e:
+        print(f"[ABANDON] Error: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
 @app.route('/api/org/subscription/pause', methods=['POST'])
 @role_required([ROLE_SUPER_ADMIN, ROLE_ORG_ADMIN])
 def pause_subscription():
