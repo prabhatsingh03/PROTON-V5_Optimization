@@ -7543,7 +7543,14 @@ def sa_list_orgs():
         orgs = []
         if rows:
             for r in rows:
-                o = dict_to_row(r)
+                o = {
+                    'id': r[0],
+                    'name': r[1],
+                    'domain': r[2],
+                    'db_file_path': r[3],
+                    'created_at': r[4].isoformat() if r[4] else None,
+                    'status': r[5]
+                }
                 org_id = o['id']
                 urow = execute_primary_query("SELECT COUNT(*) FROM users WHERE org_id = ? AND status IN ('approved','active')", (org_id,), fetch_one=True)
                 o['user_count'] = int(urow[0]) if urow else 0
