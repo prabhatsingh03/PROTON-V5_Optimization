@@ -1560,7 +1560,7 @@ def seed_plan_limits():
                 INSERT INTO plan_limits (plan_type, max_projects, max_org_admins, max_users, max_files_per_project, max_ai_prompts_per_week)
                 VALUES (?, ?, ?, ?, ?, ?)
             """
-            cursor.execute(insert_stmt, ('basic', 1, 5, 5, 20, 10))
+            cursor.execute(insert_stmt, ('basic', 1, 1, 5, 20, 10))
             cursor.execute(insert_stmt, ('si_plus', 10, 2, 10, 100, 100))
             cursor.execute(insert_stmt, ('plus', 10, 2, 10, 100, 100))
             cursor.execute(insert_stmt, ('pro', 999999, 999999, 999999, 999999, 999999))
@@ -1596,7 +1596,7 @@ def migrate_plan_limits_to_new_pricing():
         if result and max_users_basic == 2:
             print("Migrating plan_limits to new pricing structure...")
             
-            cursor.execute("UPDATE plan_limits SET max_users=5, max_org_admins=5 WHERE plan_type=%s" if DB_TYPE.lower() == "mysql" else "UPDATE plan_limits SET max_users=5, max_org_admins=5 WHERE plan_type='basic'", ('basic',) if DB_TYPE.lower() == "mysql" else ())
+            cursor.execute("UPDATE plan_limits SET max_users=5, max_org_admins=1 WHERE plan_type=%s" if DB_TYPE.lower() == "mysql" else "UPDATE plan_limits SET max_users=5, max_org_admins=1 WHERE plan_type='basic'", ('basic',) if DB_TYPE.lower() == "mysql" else ())
             print("Updated Basic plan limits: 5 users, 5 org_admins")
             
             cursor.execute("UPDATE plan_limits SET max_org_admins=999999 WHERE plan_type=%s" if DB_TYPE.lower() == "mysql" else "UPDATE plan_limits SET max_org_admins=999999 WHERE plan_type='pro'", ('pro',) if DB_TYPE.lower() == "mysql" else ())

@@ -191,7 +191,15 @@
             React.createElement(Progress, { label: 'Projects', value: u.projects || 0, limit: limits.projects ?? 0, percent: pct.projects }),
             React.createElement(Progress, { label: 'Team Members', value: u.users || 0, limit: limits.users ?? 0, percent: pct.users }),
             React.createElement(Progress, { label: 'AI Prompts (This Week)', value: u.ai_prompts_this_week || 0, limit: (limits.ai_prompts_per_week ?? 0), percent: pct.ai_prompts }),
-            React.createElement('div', { className: 'mt-2 text-[10px] text-slate-400' }, usage.subscription?.plan ? `Plan: ${usage.subscription.plan}` : ''),
+            React.createElement('div', { className: 'mt-2 text-[10px] text-slate-400' }, (() => {
+                const plan = usage.subscription?.plan;
+                const status = usage.subscription?.status;
+                const isTrial = status === 'trial' || usage.subscription?.is_trial;
+                const displayNames = { 'basic': 'Basic Plan', 'si_plus': 'Plus Plan', 'plus': 'Plus Plan', 'pro': 'Pro Plan' };
+                let displayText = plan ? (displayNames[plan] || plan) : '';
+                if (isTrial && displayText) displayText += ' (Trial)';
+                return displayText ? `Plan: ${displayText}` : '';
+            })()),
             (role === 'super_admin' || role === 'org_admin') && React.createElement('button', { onClick: () => { if (window.openSubscriptionManagement) window.openSubscriptionManagement(); }, className: 'w-full mt-3 py-2 px-3 text-xs font-medium text-purple-300 bg-purple-900/30 rounded hover:bg-purple-900/40 transition-colors' }, 'Manage Subscription →')
         );
     };

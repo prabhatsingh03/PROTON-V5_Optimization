@@ -63,7 +63,7 @@
             if (response && response.status === 403) {
                 const errorMsg = data?.message || 'You do not have permission to perform this action.';
                 setError(errorMsg);
-                if (errorMsg.includes('Maximum 2 org admins')) {
+                if (errorMsg.includes('Maximum') && errorMsg.includes('org admins')) {
                     // Keep form open so user can select different role
                 }
                 return true;
@@ -311,8 +311,9 @@
             if (!user) return;
 
             // Client-side validation: Check org_admin limit
-            if (newRole === 'org_admin' && user.role !== 'org_admin' && loggedInUser.role !== 'super_admin' && orgAdminCount >= 2) {
-                setError('Maximum 2 org admins allowed. Please change an existing admin\'s role first.');
+            const maxAdmins = subscription?.plan_limits?.max_org_admins || 1;
+            if (newRole === 'org_admin' && user.role !== 'org_admin' && loggedInUser.role !== 'super_admin' && orgAdminCount >= maxAdmins) {
+                setError(`Maximum ${maxAdmins} org admins allowed. Please change an existing admin's role first.`);
                 return;
             }
 
@@ -545,6 +546,7 @@
             fetchPendingAdmins();
             if (activeTab === 'users') {
                 fetchUsers();
+                fetchSubscription(); // Fetch subscription to get plan limits
             } else if (activeTab === 'subscription') {
                 fetchSubscription();
             } else if (activeTab === 'logs') {
@@ -607,8 +609,8 @@
                         React.createElement('h2', { className: 'text-xl font-semibold text-gray-900' }, 'User Management'),
                         React.createElement('div', { className: 'flex items-center space-x-2' },
                             React.createElement('span', {
-                                className: `text-sm px-2 py-1 rounded ${orgAdminCount < 2 ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}`
-                            }, `Org Admins: ${orgAdminCount}/2`),
+                                className: `text-sm px-2 py-1 rounded ${orgAdminCount < (subscription?.plan_limits?.max_org_admins || 1) ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}`
+                            }, `Org Admins: ${orgAdminCount}/${subscription?.plan_limits?.max_org_admins || 1}`),
                             canManageUsers(loggedInUser?.role) && React.createElement('button', {
                                 onClick: () => { setShowCreateForm(true); resetForm(); },
                                 className: 'px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors'
@@ -734,7 +736,7 @@
                                     'Role',
                                     React.createElement('span', {
                                         className: 'ml-2 text-xs text-gray-500'
-                                    }, `Org Admins: ${orgAdminCount}/2`)
+                                    }, `Org Admins: ${orgAdminCount}/${subscription?.plan_limits?.max_org_admins || 1}`)
                                 ),
                                 React.createElement('select', {
                                     value: formData.role,
@@ -744,12 +746,12 @@
                                     React.createElement('option', { value: 'org_user' }, 'Org User'),
                                     React.createElement('option', {
                                         value: 'org_admin',
-                                        disabled: orgAdminCount >= 2 && loggedInUser?.role !== 'super_admin' && (!editingUser || editingUser.role !== 'org_admin')
-                                    }, orgAdminCount >= 2 && loggedInUser?.role !== 'super_admin' && (!editingUser || editingUser.role !== 'org_admin') ? 'Org Admin (Limit Reached)' : 'Org Admin')
+                                        disabled: orgAdminCount >= (subscription?.plan_limits?.max_org_admins || 1) && loggedInUser?.role !== 'super_admin' && (!editingUser || editingUser.role !== 'org_admin')
+                                    }, orgAdminCount >= (subscription?.plan_limits?.max_org_admins || 1) && loggedInUser?.role !== 'super_admin' && (!editingUser || editingUser.role !== 'org_admin') ? 'Org Admin (Limit Reached)' : 'Org Admin')
                                 ),
-                                (orgAdminCount >= 2 && loggedInUser?.role !== 'super_admin' && (!editingUser || editingUser.role !== 'org_admin')) && React.createElement('div', {
+                                (orgAdminCount >= (subscription?.plan_limits?.max_org_admins || 1) && loggedInUser?.role !== 'super_admin' && (!editingUser || editingUser.role !== 'org_admin')) && React.createElement('div', {
                                     className: 'mt-1 text-sm text-yellow-600'
-                                }, '⚠️ Maximum 2 org admins allowed. Please change an existing admin\'s role to org_user before adding new admins.')
+                                }, `⚠️ Maximum ${subscription?.plan_limits?.max_org_admins || 1} org admins allowed. Please change an existing admin's role to org_user before adding new admins.`)
                             ),
                             React.createElement('div', null,
                                 React.createElement('label', {
@@ -1055,7 +1057,8 @@
                                 ['basic', 'si_plus', 'pro'].map(p => {
                                     const basePrice = planBasePrices[p];
                                     const includedUsers = planIncludedUsers[p];
-                                    const planName = p === 'si_plus' ? 'SI+' : p.toUpperCase();
+                                    const planNames = { 'basic': 'Basic Plan', 'si_plus': 'Plus Plan', 'pro': 'Pro Plan' };
+                                    const planName = planNames[p] || p.toUpperCase();
                                     return React.createElement('div', {
                                         key: p,
                                         className: `p-4 rounded-lg border ${selPlan === p ? 'border-indigo-500' : 'border-slate-200'} cursor-pointer`,

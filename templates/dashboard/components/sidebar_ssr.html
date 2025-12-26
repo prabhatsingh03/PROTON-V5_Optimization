@@ -311,7 +311,17 @@
                     ${renderProgress('Projects', u.projects || 0, limits.projects ?? 0, pct.projects)}
                     ${renderProgress('Team Members', u.users || 0, limits.users ?? 0, pct.users)}
                     ${renderProgress('AI Prompts (This Week)', u.ai_prompts_this_week || 0, limits.ai_prompts_per_week ?? 0, pct.ai_prompts)}
-                    <div class="mt-2 text-[10px] text-slate-400">${usageData.subscription?.plan ? `Plan: ${usageData.subscription.plan}` : ''}</div>
+                    <div class="mt-2 text-[10px] text-slate-400">
+                        ${(() => {
+                    const plan = usageData.subscription?.plan;
+                    const status = usageData.subscription?.status;
+                    const isTrial = status === 'trial' || usageData.subscription?.is_trial;
+                    const displayNames = { 'basic': 'Basic Plan', 'si_plus': 'Plus Plan', 'plus': 'Plus Plan', 'pro': 'Pro Plan' };
+                    let displayText = plan ? (displayNames[plan] || plan) : '';
+                    if (isTrial && displayText) displayText += ' (Trial)';
+                    return displayText ? `Plan: ${displayText}` : '';
+                })()}
+                    </div>
             `;
 
             if (role === 'super_admin' || role === 'org_admin') {
