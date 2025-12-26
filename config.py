@@ -24,7 +24,10 @@ MYSQL_USER = os.environ.get("MYSQL_USER", "")
 MYSQL_PASSWORD = os.environ.get("MYSQL_PASSWORD", "")
 MYSQL_PRIMARY_DATABASE = os.environ.get("MYSQL_PRIMARY_DATABASE", "proton_primary")
 MYSQL_CHARSET = os.environ.get("MYSQL_CHARSET", "utf8mb4")
-MYSQL_POOL_SIZE = int(os.environ.get("MYSQL_POOL_SIZE", "10"))
+MYSQL_POOL_SIZE = int(os.environ.get("MYSQL_POOL_SIZE", "2"))
+# Safety clamp: Limit pool size to 5 to prevent "Too many connections" errors in multi-tenant/multi-worker setup
+if MYSQL_POOL_SIZE > 5:
+    MYSQL_POOL_SIZE = 5
 MYSQL_POOL_RECYCLE = int(os.environ.get("MYSQL_POOL_RECYCLE", "3600"))
 
 # SMTP / Email configuration

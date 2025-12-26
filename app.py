@@ -713,6 +713,9 @@ else:
 	if os.environ.get("WERKZEUG_RUN_MAIN") == "true":
 		print("WARNING: Razorpay credentials not configured. Payment features will be disabled.")
 
+if os.environ.get("WERKZEUG_RUN_MAIN") == "true":
+    print(f"MySQL Connection Pool Size per Tenant: {MYSQL_POOL_SIZE}")
+
 # Validate SMTP configuration and print status
 if SMTP_USERNAME and SMTP_PASSWORD:
 	if os.environ.get("WERKZEUG_RUN_MAIN") == "true":
@@ -1843,6 +1846,7 @@ def get_tenant_db_connection():
                 consume_results=True,
             )
             
+            # print(f"[DB-POOL] Tenant connection obtained: {db_name} (Pool: {pool_name})")
             return conn
         else:
             # This should not happen in MySQL-only mode
