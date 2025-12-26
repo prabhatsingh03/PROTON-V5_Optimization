@@ -32,6 +32,19 @@
 </div>
 {% endblock %}
 
+{% block extra_head %}
+<!-- DHTMLX Gantt -->
+<script src="https://cdn.dhtmlx.com/gantt/edge/dhtmlxgantt.js"></script>
+<link href="https://cdn.dhtmlx.com/gantt/edge/dhtmlxgantt.css" rel="stylesheet">
+<style>
+    /* Custom style to fit the container */
+    #gantt_here {
+        width: 100%;
+        height: 100%;
+    }
+</style>
+{% endblock %}
+
 {% block content %}
 <!-- Tab Navigation Bar -->
 <div class="workspace-tabs sticky top-0 z-20 bg-white shadow-md mb-4 rounded-lg overflow-x-auto">

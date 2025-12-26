@@ -1,95 +1,138 @@
+{% raw %}
 <script type="text/babel">
-    const GanttTab = ({ tasks, onToggleExpansion }) => {
-        const { useState, useMemo } = React;
-        const [zoomLevel, setZoomLevel] = useState('day'); // day, week, month
-        
-        // Calculate DAY_WIDTH based on zoom level
-        const DAY_WIDTH = useMemo(() => {
-            switch (zoomLevel) {
-                case 'week': return 15;
-                case 'month': return 5;
-                default: return 30;
-            }
-        }, [zoomLevel]);
-        
-        const handleZoomChange = (level) => {
-            setZoomLevel(level);
-        };
-        
-        return React.createElement("div", { className: "gantt-tab-container h-full flex flex-col" },
-            // Gradient Header with Controls
-            React.createElement("div", { className: "bg-gradient-to-r from-blue-500 to-purple-600 text-white p-6 rounded-xl shadow-lg mb-4" },
-                React.createElement("div", { className: "flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4" },
-                    React.createElement("h2", { className: "text-2xl font-bold" }, "Project Gantt Chart"),
-                    React.createElement("div", { className: "flex items-center gap-4" },
-                        // Zoom Controls
-                        React.createElement("div", { className: "flex gap-2 bg-white/20 rounded-lg p-1" },
-                            React.createElement("button", {
-                                onClick: () => handleZoomChange('day'),
-                                className: `px-4 py-2 rounded-md text-sm font-semibold transition-colors ${
-                                    zoomLevel === 'day' ? 'bg-white text-blue-600' : 'text-white hover:bg-white/20'
-                                }`
-                            }, "Day"),
-                            React.createElement("button", {
-                                onClick: () => handleZoomChange('week'),
-                                className: `px-4 py-2 rounded-md text-sm font-semibold transition-colors ${
-                                    zoomLevel === 'week' ? 'bg-white text-blue-600' : 'text-white hover:bg-white/20'
-                                }`
-                            }, "Week"),
-                            React.createElement("button", {
-                                onClick: () => handleZoomChange('month'),
-                                className: `px-4 py-2 rounded-md text-sm font-semibold transition-colors ${
-                                    zoomLevel === 'month' ? 'bg-white text-blue-600' : 'text-white hover:bg-white/20'
-                                }`
-                            }, "Month")
-                        ),
-                        // Export Button
-                        React.createElement("button", {
-                            onClick: () => {
-                                window.dispatchEvent(new CustomEvent('workspaceExportGantt'));
-                            },
-                            className: "px-4 py-2 bg-white/20 hover:bg-white/30 rounded-lg text-sm font-semibold transition-colors"
-                        }, "Export Gantt")
-                    )
-                ),
-                // Legend
-                React.createElement("div", { className: "mt-4 flex flex-wrap gap-4 text-sm" },
-                    React.createElement("div", { className: "flex items-center gap-2" },
-                        React.createElement("div", { className: "w-4 h-4 bg-slate-400 rounded" }),
-                        React.createElement("span", null, "Not Started")
-                    ),
-                    React.createElement("div", { className: "flex items-center gap-2" },
-                        React.createElement("div", { className: "w-4 h-4 bg-blue-500 rounded" }),
-                        React.createElement("span", null, "In Progress")
-                    ),
-                    React.createElement("div", { className: "flex items-center gap-2" },
-                        React.createElement("div", { className: "w-4 h-4 bg-green-500 rounded" }),
-                        React.createElement("span", null, "Completed")
-                    ),
-                    React.createElement("div", { className: "flex items-center gap-2" },
-                        React.createElement("div", { className: "w-4 h-4 bg-red-500 rounded" }),
-                        React.createElement("span", null, "Delayed")
-                    ),
-                    React.createElement("div", { className: "flex items-center gap-2" },
-                        React.createElement("div", { className: "w-4 h-4 bg-blue-200 rounded border-2 border-blue-400" }),
-                        React.createElement("span", null, "Weather Delay")
-                    ),
-                    React.createElement("div", { className: "flex items-center gap-2" },
-                        React.createElement("div", { className: "w-4 h-4 bg-yellow-200 rounded border-2 border-yellow-400" }),
-                        React.createElement("span", null, "Contractor Delay")
-                    ),
-                    React.createElement("div", { className: "flex items-center gap-2" },
-                        React.createElement("div", { className: "w-4 h-4 bg-red-200 rounded border-2 border-red-400" }),
-                        React.createElement("span", null, "Client Delay")
-                    )
-                )
-            ),
-            
-            // Gantt Chart Area
-            React.createElement("div", { className: "flex-1 overflow-auto bg-white rounded-xl shadow-xl" },
-                React.createElement(GanttChart, { tasks: tasks })
-            )
+    const GanttTab = ({ tasks }) => {
+        const { useEffect, useRef } = React;
+        const ganttContainerRef = useRef(null);
+
+        useEffect(() => {
+            if (!ganttContainerRef.current) return;
+
+            // Initialize Gantt
+            gantt.init(ganttContainerRef.current);
+
+            // Configure Scale (Week Wise as requested)
+            gantt.config.scales = [
+                { unit: "year", step: 1, format: "%Y" },
+                { unit: "month", step: 1, format: "%F" },
+                { unit: "week", step: 1, format: "W%W" }
+            ];
+            gantt.config.scale_height = 75;
+            gantt.config.min_column_width = 100;
+            gantt.config.autoscroll = true;
+            gantt.config.autoscroll_speed = 50;
+
+            // Configure Date Format for Grid
+            gantt.config.date_grid = "%d-%m-%Y";
+
+            // Ensure proper row height for content visibility
+            gantt.config.row_height = 35;
+            gantt.config.task_height = 20;
+
+            // Configure Columns with larger widths
+            gantt.config.columns = [
+                { name: "wbs", label: "WBS", width: 100, align: "center" },
+                { name: "text", label: "Task Name", tree: true, width: 300 },
+                { name: "start_date", label: "Start Date", align: "center", width: 150 },
+                { name: "end_date", label: "End Date", align: "center", width: 150 },
+                {
+                    name: "progress", label: "%", align: "center", width: 80, template: function (obj) {
+                        return Math.round((obj.progress || 0) * 100) + "%";
+                    }
+                }
+            ];
+
+            // Set grid width to ensure columns display properly
+            gantt.config.grid_width = 800; 
+            // Allow editing (optional, can be disabled if read-only)
+            gantt.config.readonly = true;
+
+            // Process tasks for DHTMLX
+            const processTasks = (inputTasks) => {
+                const data = [];
+                const links = [];
+
+                const traverse = (taskList, parentId = null) => {
+                    if (!taskList) return;
+
+                    taskList.forEach(task => {
+                        // Parse dates carefully
+                        let startDate = task.plannedStartDate ? new Date(task.plannedStartDate) : null;
+                        let endDate = task.plannedEndDate ? new Date(task.plannedEndDate) : null;
+
+                        // Validate dates
+                        if (startDate && isNaN(startDate.getTime())) startDate = null;
+                        if (endDate && isNaN(endDate.getTime())) endDate = null;
+
+                        // Prevent negative duration / invalid ranges
+                        // If we have both, ensure end >= start
+                        if (startDate && endDate && endDate < startDate) {
+                            endDate = new Date(startDate); // snap to start if invalid
+                        }
+
+                        // If DHTMLX receives Date objects, it ignores date_format config, which is safer here.
+                        // Only add task if at least start date is valid (or we can fallback to today)
+                        // For Gantt chart to render, it needs a valid date.
+
+                        if (startDate) {
+                            const dhtmlxTask = {
+                                id: task.id,
+                                text: task.taskName,
+                                start_date: startDate,
+                                parent: parentId ? parentId : 0,
+                                open: false, // Initially collapsed
+                                progress: (task.progress || 0) / 100,
+                                wbs: task.wbs
+                            };
+
+                            if (endDate) {
+                                dhtmlxTask.end_date = endDate;
+                            } else {
+                                // Default duration if no end date
+                                dhtmlxTask.duration = 1;
+                            }
+
+                            // Explicit duration override if provided and valid
+                            if (task.duration && task.duration > 0) {
+                                dhtmlxTask.duration = task.duration;
+                                // If we have duration, DHTMLX can calc end_date, so we can omit end_date if we want consistency
+                                // But usually having both dates is fine if they match.
+                            }
+
+                            data.push(dhtmlxTask);
+                        }
+
+                        // Recursively process subtasks
+                        if (task.subtasks && task.subtasks.length > 0) {
+                            traverse(task.subtasks, task.id);
+                        }
+                    });
+                };
+
+                traverse(inputTasks);
+                return { data, links };
+            };
+
+            const { data, links } = processTasks(tasks);
+
+            // Clear and Parse
+            gantt.clearAll();
+            gantt.parse({ data, links });
+
+            return () => {
+                gantt.clearAll();
+            };
+        }, [tasks]);
+
+        return (
+            <div className="h-full flex flex-col">
+                <div
+                    ref={ganttContainerRef}
+                    id="gantt_here"
+                    className="flex-1 w-full bg-white rounded-xl shadow-lg overflow-hidden"
+                    style={{ minHeight: '600px' }}
+                ></div>
+            </div>
         );
     };
 </script>
-
+{% endraw %}

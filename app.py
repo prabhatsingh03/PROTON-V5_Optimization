@@ -378,7 +378,7 @@ if DEV_MODE or os.environ.get('FLASK_ENV', '').lower() == 'development':
 # This is safe because 'self' already allows same-origin, this just makes it explicit
 CSP_CONNECT_SRC += " http://localhost:5125 http://127.0.0.1:5125"
 
-CSP_POLICY = f"default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://unpkg.com https://checkout.razorpay.com https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self' {CSP_CONNECT_SRC}; frame-src https://*.razorpay.com https://checkout.razorpay.com https://api.razorpay.com"
+CSP_POLICY = f"default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://unpkg.com https://checkout.razorpay.com https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://cdn.dhtmlx.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.dhtmlx.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: https:; connect-src 'self' {CSP_CONNECT_SRC} https://cdn.dhtmlx.com; frame-src https://*.razorpay.com https://checkout.razorpay.com https://api.razorpay.com"
 
 def invalidate_billing_metrics_cache():
     try:
