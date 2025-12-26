@@ -3615,17 +3615,30 @@ def upsert_project_ai_insights(project_id, insights_obj):
         )
         updated_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         insights_json = json.dumps(insights_obj or {})
-        execute_tenant_query(
-            """
-            INSERT INTO project_ai_insights (project_id, insights_json, updated_at)
-            VALUES (?, ?, ?)
-            ON CONFLICT(project_id) DO UPDATE SET
-                insights_json = excluded.insights_json,
-                updated_at = excluded.updated_at
-            """,
-            (project_id, insights_json, updated_at),
-            commit=True
-        )
+        if DB_TYPE.lower() == "mysql":
+            execute_tenant_query(
+                """
+                INSERT INTO project_ai_insights (project_id, insights_json, updated_at)
+                VALUES (?, ?, ?)
+                ON DUPLICATE KEY UPDATE
+                    insights_json = VALUES(insights_json),
+                    updated_at = VALUES(updated_at)
+                """,
+                (project_id, insights_json, updated_at),
+                commit=True
+            )
+        else:
+            execute_tenant_query(
+                """
+                INSERT INTO project_ai_insights (project_id, insights_json, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(project_id) DO UPDATE SET
+                    insights_json = excluded.insights_json,
+                    updated_at = excluded.updated_at
+                """,
+                (project_id, insights_json, updated_at),
+                commit=True
+            )
         return True
     except Exception as e:
         print(f"Error upserting project AI insights for project_id={project_id}: {e}")
@@ -10769,6 +10782,9 @@ def get_ai_insights_for_project(project_name):
     except TenantResolutionError as e:
         return jsonify({"status": "error", "message": "Organization not found or inactive."}), 404
     except Exception as e:
+        with open("debug_error.log", "a") as f:
+            f.write(f"Error in get_ai_insights_for_project (name={project_name}): {e}\n")
+        print(f"Error in get_ai_insights_for_project: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
