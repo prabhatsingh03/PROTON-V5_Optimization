@@ -10178,7 +10178,7 @@ def get_projects():
         # Note: client_access_code is exposed in project list - consider security implications
         # for non-admin contexts if needed in future iterations
         results = execute_tenant_query(
-            "SELECT id, name, client_access_code, created_at FROM projects ORDER BY created_at DESC",
+            "SELECT p.id, p.name, p.client_access_code, p.created_at, COALESCE(t.progress, 0) as overall_actual_progress FROM projects p LEFT JOIN tasks t ON p.id = t.project_id AND t.wbs = '1' ORDER BY p.created_at DESC",
             fetch_all=True,
             as_dict=True  # Return dict results for JSON serialization
         )

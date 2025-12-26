@@ -19,9 +19,9 @@
           });
         }
       }
-    } catch (e) {}
+    } catch (e) { }
 
-    const progress = 0; // placeholder for now
+    const progress = project.overall_actual_progress !== undefined ? Math.round(project.overall_actual_progress) : 0;
     const status = 'Active';
 
     return (
@@ -60,7 +60,7 @@
 
           <div className="project-progress-container">
             <div className="project-progress-label">
-              <span>Overall Progress</span>
+              <span>Actual Project Progress</span>
               <span>{progress}%</span>
             </div>
             <div className="project-progress-bar">
@@ -100,5 +100,3 @@
   };
 </script>
 {% endraw %}
-
-
