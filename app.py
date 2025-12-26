@@ -278,6 +278,46 @@ def validate_and_sanitize_task_id(task_id):
         return (False, tid, 'Invalid task ID format.')
     return (True, tid, '')
 
+def sanitize_timestamp_for_db(ts_input):
+    """
+    Convert a timestamp string (which might be in RFC 1123, ISO 8601, or other formats)
+    into a MySQL-compatible 'YYYY-MM-DD HH:MM:SS' string.
+    Falls back to current time if parsing fails or input is empty.
+    """
+    if not ts_input:
+        return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    
+    # If it's already a datetime object
+    if isinstance(ts_input, datetime):
+        return ts_input.strftime('%Y-%m-%d %H:%M:%S')
+        
+    ts_str = str(ts_input).strip()
+    
+    # Attempt to parse common formats
+    potential_formats = [
+        '%Y-%m-%d %H:%M:%S',      # Standard MySQL
+        '%a, %d %b %Y %H:%M:%S %Z', # RFC 1123 (e.g. Wed, 24 Dec 2025 14:13:44 GMT)
+        '%Y-%m-%dT%H:%M:%S',      # ISO 8601
+        '%Y-%m-%dT%H:%M:%S.%f',   # ISO 8601 with millis
+        '%Y-%m-%d',               # Date only
+    ]
+    
+    parsed_dt = None
+    for fmt in potential_formats:
+        try:
+            parsed_dt = datetime.strptime(ts_str, fmt)
+            break
+        except ValueError:
+            continue
+            
+    if parsed_dt:
+        return parsed_dt.strftime('%Y-%m-%d %H:%M:%S')
+    
+    # Fallback: try using dateutil if available (usually more robust), 
+    # but here we'll just log and default to now() to prevent crash.
+    print(f"Warning: Could not parse timestamp '{ts_str}'. Defaulting to NOW.")
+    return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
 # SuperAdmin API Configuration
 SUPERADMIN_DEFAULT_PAGE_SIZE = 50
 SUPERADMIN_MAX_PAGE_SIZE = 100
@@ -2163,12 +2203,28 @@ def resolve_tenant():
                 db_file_path = get_tenant_db_path(g.org_id)
                 g.tenant_db_path = db_file_path
                 
-                # Check subscription status
+                # Check subscription status - PRIORITIZE ACTIVE PLANS
+                # First, check if there is ANY active/valid subscription
+                # This prevents a recent "abandoned" upgrade attempt from blocking an existing "active" plan
+                active_status_query = """
+                    SELECT status FROM subscriptions 
+                    WHERE org_id = ? 
+                    AND status IN ('active', 'trial', 'authenticated', 'created', 'paused', 'pending_cancellation')
+                    ORDER BY id DESC LIMIT 1
+                """
                 subscription_result_raw = execute_primary_query(
-                    "SELECT status FROM subscriptions WHERE org_id = ? ORDER BY id DESC LIMIT 1",
+                    active_status_query,
                     params=(g.org_id,),
                     fetch_one=True
                 )
+                
+                # If no active plan found, get the absolute latest status (which might be abandoned, expired, cancelled)
+                if not subscription_result_raw:
+                    subscription_result_raw = execute_primary_query(
+                        "SELECT status FROM subscriptions WHERE org_id = ? ORDER BY id DESC LIMIT 1",
+                        params=(g.org_id,),
+                        fetch_one=True
+                    )
                 
                 subscription_status = None
                 if subscription_result_raw:
@@ -3845,7 +3901,7 @@ def save_tasks_to_db(project_id, tasks, conn=None):
                     notes_data.append((
                         task_dict['id'],
                         note.get('text', ''),
-                        note.get('timestamp', ''),
+                        sanitize_timestamp_for_db(note.get('timestamp')),
                         note.get('source', '')
                     ))
                 
@@ -3862,7 +3918,7 @@ def save_tasks_to_db(project_id, tasks, conn=None):
                         comment.get('adminComment', ''),
                         comment.get('clientStatus', ''),
                         comment.get('adminSeen', False),
-                        comment.get('timestamp', '')
+                        sanitize_timestamp_for_db(comment.get('timestamp'))
                     ))
                     
                     # Prepare attachments data for this comment
@@ -4305,7 +4361,7 @@ def add_task():
         }
 
         mode = context.get('mode')
-        target_task_id = context.get('task', {}).get('id')
+        target_task_id = (context.get('task') or {}).get('id')
 
         if mode == 'child':
             def find_and_add_subtask(task_list, parent_id):
