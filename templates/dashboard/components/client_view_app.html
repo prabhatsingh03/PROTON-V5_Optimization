@@ -1,0 +1,502 @@
+<script type="text/babel">
+    // Client View App Component - Client-specific interface
+    const ClientViewApp = () => {
+        const { useState, useEffect, useCallback, useMemo } = React;
+        
+        // Authentication state
+        const [loggedInUser, setLoggedInUser] = useState(null);
+        const [isLoading, setIsLoading] = useState(true);
+        const [error, setError] = useState(null);
+        
+        // Tab state
+        const getInitialTab = () => {
+            const urlParams = new URLSearchParams(window.location.search);
+            const tabParam = urlParams.get('tab');
+            const validTabs = ['deliverables', 'communication', 'documents'];
+            return validTabs.includes(tabParam) ? tabParam : 'deliverables';
+        };
+        const [activeTab, setActiveTab] = useState(getInitialTab);
+        
+        // Data state
+        const [selectedProject, setSelectedProject] = useState('');
+        const [projects, setProjects] = useState([]);
+        const [tasks, setTasks] = useState([]);
+        const [documents, setDocuments] = useState([]);
+        const [messages, setMessages] = useState([]);
+        const [isLoadingData, setIsLoadingData] = useState(false);
+        
+        // JWT Authentication Helper Functions (copied from charts.html)
+        function isTokenExpired(token) {
+            if (!token) return true;
+            try {
+                let payload = token.split('.')[1];
+                payload = payload.replace(/-/g, '+').replace(/_/g, '/');
+                while (payload.length % 4) { payload += '='; }
+                const decoded = JSON.parse(atob(payload));
+                if (decoded.exp) {
+                    const expDate = new Date(decoded.exp * 1000);
+                    return expDate < new Date();
+                }
+                return false;
+            } catch { return true; }
+        }
+        
+        function handleSessionTimeout() {
+            localStorage.removeItem('access_token');
+            localStorage.removeItem('refresh_token');
+            localStorage.removeItem('user_data');
+            localStorage.removeItem('aiProjectControlTowerAuth_v2');
+            window.location.href = '/';
+        }
+        
+        const refreshAccessToken = async () => {
+            const refreshToken = localStorage.getItem('refresh_token');
+            if (!refreshToken) { handleSessionTimeout(); return false; }
+            try {
+                const response = await fetch('/api/refresh', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ refresh_token: refreshToken })
+                });
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data && data.access_token) {
+                        localStorage.setItem('access_token', data.access_token);
+                        return true;
+                    }
+                }
+                handleSessionTimeout();
+                return false;
+            } catch { handleSessionTimeout(); return false; }
+        };
+        
+        const makeAuthenticatedRequest = async (url, options = {}) => {
+            let accessToken = localStorage.getItem('access_token');
+            if (isTokenExpired(accessToken)) {
+                const newToken = await refreshAccessToken();
+                if (!newToken || isTokenExpired(newToken)) {
+                    throw new Error('Session expired');
+                }
+                accessToken = localStorage.getItem('access_token');
+            }
+            if (!options.headers) { options.headers = {}; }
+            options.headers['Authorization'] = 'Bearer ' + accessToken;
+            let response = await fetch(url, options);
+            if (response.status === 401) {
+                const refreshSuccess = await refreshAccessToken();
+                if (refreshSuccess) {
+                    const newAccessToken = localStorage.getItem('access_token');
+                    if (newAccessToken && !isTokenExpired(newAccessToken)) {
+                        options.headers['Authorization'] = 'Bearer ' + newAccessToken;
+                        response = await fetch(url, options);
+                    } else {
+                        throw new Error('Session expired');
+                    }
+                } else {
+                    throw new Error('Session expired');
+                }
+            }
+            return response;
+        };
+        
+        // Authentication check
+        useEffect(() => {
+            const accessToken = localStorage.getItem('access_token');
+            const userData = localStorage.getItem('user_data');
+            if (!accessToken || !userData) {
+                window.location.href = '/';
+                return;
+            }
+            if (isTokenExpired(accessToken)) {
+                handleSessionTimeout();
+                return;
+            }
+            try {
+                const authData = JSON.parse(userData);
+                const payload = accessToken.split('.')[1];
+                const decoded = JSON.parse(atob(payload.replace(/-/g, '+').replace(/_/g, '/').replace(/(.{4})/g, '$1=').replace(/=+$/, '')));
+                authData.role = decoded.role || authData.userType;
+                authData.org_id = decoded.org_id;
+                
+                // Role check - only client can access
+                if (authData.role !== 'client' && authData.userType !== 'client') {
+                    window.location.href = '/dashboard';
+                    return;
+                }
+                
+                setLoggedInUser(authData);
+                
+                // Set project from user data if available
+                if (authData.project) {
+                    setSelectedProject(authData.project);
+                }
+            } catch (e) {
+                handleSessionTimeout();
+            }
+            setIsLoading(false);
+        }, []);
+        
+        // Listen for tab change events
+        useEffect(() => {
+            const handleTabChangeEvent = (event) => {
+                if (event.detail && event.detail.tab) {
+                    setActiveTab(event.detail.tab);
+                }
+            };
+            window.addEventListener('clientTabChange', handleTabChangeEvent);
+            return () => window.removeEventListener('clientTabChange', handleTabChangeEvent);
+        }, []);
+        
+        // Fetch projects (if client has access to multiple)
+        useEffect(() => {
+            if (!loggedInUser) return;
+            makeAuthenticatedRequest('/api/projects', {
+                method: 'GET',
+                headers: { 'Content-Type': 'application/json' }
+            })
+            .then(res => res.json())
+            .then(data => {
+                // Handle error responses (non-array) and ensure projects is always an array
+                const projectsArray = Array.isArray(data) ? data : [];
+                if (!Array.isArray(data) && data && data.status === 'error') {
+                    console.error('Projects API error:', data.message);
+                }
+                setProjects(projectsArray);
+                // Set default project if none selected and projects available
+                if (!selectedProject && projectsArray.length > 0) {
+                    setSelectedProject(projectsArray[0].name);
+                }
+            })
+            .catch(err => {
+                console.error('Failed to fetch projects:', err);
+                setProjects([]);
+            });
+        }, [loggedInUser]);
+        
+        // Handle project change
+        useEffect(() => {
+            if (!selectedProject || !loggedInUser) return;
+            if (activeTab === 'deliverables') {
+                fetchTasks();
+            } else if (activeTab === 'documents') {
+                fetchDocuments();
+            } else if (activeTab === 'communication') {
+                fetchMessages();
+            }
+        }, [selectedProject, activeTab, loggedInUser, fetchTasks, fetchDocuments, fetchMessages]);
+        
+        // Shared helper function for filtering client deliverables (extracted to avoid duplication)
+        // Defined outside useCallback to allow recursion
+        const filterClientDeliverablesHelper = (taskList) => {
+            if (!taskList) return [];
+            return taskList
+                .map(task => ({ ...task, subtasks: filterClientDeliverablesHelper(task.subtasks) }))
+                .filter(task => task.is_client_deliverable || task.isClientDeliverable || (task.subtasks && task.subtasks.length > 0));
+        };
+        
+        // Filter tasks to show only client deliverables
+        const clientViewTasks = useMemo(() => {
+            if (!tasks) return [];
+            return filterClientDeliverablesHelper(tasks);
+        }, [tasks]);
+        
+        // Fetch tasks (filtered for client deliverables)
+        const fetchTasks = useCallback(async () => {
+            if (!selectedProject) return;
+            setIsLoadingData(true);
+            try {
+                const response = await makeAuthenticatedRequest(`/api/tasks?project=${encodeURIComponent(selectedProject)}`, {
+                    method: 'GET',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                const data = await response.json();
+                if (data.status === 'success') {
+                    // Filter to only client deliverables using shared helper
+                    setTasks(filterClientDeliverablesHelper(data.tasks || []));
+                }
+            } catch (err) {
+                setError(err.message);
+            } finally {
+                setIsLoadingData(false);
+            }
+        }, [selectedProject]);
+        
+        // Fetch documents (client-accessible only)
+        const fetchDocuments = useCallback(async () => {
+            if (!selectedProject) return;
+            setIsLoadingData(true);
+            try {
+                const response = await makeAuthenticatedRequest(`/api/documents?project_name=${encodeURIComponent(selectedProject)}`, {
+                    method: 'GET',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                const data = await response.json();
+                if (data.status === 'success' && data.documents) {
+                    // Filter to only client-accessible documents
+                    setDocuments(data.documents.filter(doc => doc.client_accessible || doc.isClientAccessible));
+                }
+            } catch (err) {
+                setError(err.message);
+            } finally {
+                setIsLoadingData(false);
+            }
+        }, [selectedProject]);
+        
+        // Fetch messages
+        const fetchMessages = useCallback(async () => {
+            if (!selectedProject) return;
+            setIsLoadingData(true);
+            try {
+                // Use task-based communication or dedicated client communication API
+                const response = await makeAuthenticatedRequest(`/api/tasks?project=${encodeURIComponent(selectedProject)}`, {
+                    method: 'GET',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                const data = await response.json();
+                if (data.status === 'success') {
+                    // Extract client comments from tasks
+                    const allMessages = [];
+                    const extractMessages = (taskList) => {
+                        if (!taskList) return;
+                        taskList.forEach(task => {
+                            if (task.clientComments && task.clientComments.length > 0) {
+                                task.clientComments.forEach(comment => {
+                                    allMessages.push({ ...comment, taskName: task.taskName, wbs: task.wbs });
+                                });
+                            }
+                            if (task.subtasks) extractMessages(task.subtasks);
+                        });
+                    };
+                    extractMessages(data.tasks || []);
+                    setMessages(allMessages);
+                }
+            } catch (err) {
+                setError(err.message);
+            } finally {
+                setIsLoadingData(false);
+            }
+        }, [selectedProject]);
+        
+        // Note: Data fetching is handled by the useEffect that watches selectedProject and activeTab changes
+        
+        // Loading state
+        if (isLoading) {
+            return React.createElement('div', { className: 'flex items-center justify-center min-h-screen' },
+                React.createElement('div', { className: 'animate-spin rounded-full h-12 w-12 border-t-4 border-b-4 border-pink-500' })
+            );
+        }
+        
+        // Error state
+        if (error && !loggedInUser) {
+            return React.createElement('div', { className: 'p-6 bg-red-50 border border-red-200 rounded-lg text-red-700' },
+                React.createElement('p', { className: 'font-semibold' }, 'Error:'),
+                React.createElement('p', null, error)
+            );
+        }
+        
+        // Render tab content
+        const renderTabContent = () => {
+            if (activeTab === 'deliverables') {
+                // Render task table (read-only, copied from wbs_tab.html)
+                return React.createElement('div', { className: 'space-y-4' },
+                    React.createElement('div', { className: 'flex justify-between items-center mb-4' },
+                        React.createElement('h2', { className: 'text-xl font-semibold text-gray-900' }, 'Deliverables'),
+                        React.createElement('button', {
+                            onClick: () => {
+                                // Export CSV
+                                let csvContent = 'WBS,Task Name,Status,Progress,Start Date,End Date,Assigned To\n';
+                                const flattenTasks = (taskList) => {
+                                    if (!taskList) return;
+                                    taskList.forEach(task => {
+                                        if (task.is_client_deliverable || task.isClientDeliverable) {
+                                            csvContent += `"${task.wbs || ''}","${task.taskName || ''}","${task.status || ''}","${task.progress || 0}","${task.plannedStartDate || ''}","${task.plannedEndDate || ''}","${task.assignedTo || ''}"\n`;
+                                        }
+                                        if (task.subtasks) flattenTasks(task.subtasks);
+                                    });
+                                };
+                                flattenTasks(clientViewTasks);
+                                const blob = new Blob([csvContent], { type: 'text/csv' });
+                                const url = URL.createObjectURL(blob);
+                                const link = document.createElement('a');
+                                link.href = url;
+                                link.download = 'deliverables.csv';
+                                document.body.appendChild(link);
+                                link.click();
+                                document.body.removeChild(link);
+                                URL.revokeObjectURL(url);
+                            },
+                            className: 'px-4 py-2 bg-gradient-to-r from-pink-500 to-violet-600 text-white rounded-lg hover:from-pink-600 hover:to-violet-700 transition-colors font-semibold'
+                        }, 'Export CSV')
+                    ),
+                    React.createElement('div', { className: 'overflow-x-auto' },
+                        React.createElement('table', { className: 'deliverables-table min-w-full divide-y divide-gray-200' },
+                            React.createElement('thead', { className: 'bg-gray-50' },
+                                React.createElement('tr', null,
+                                    React.createElement('th', { className: 'px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider' }, 'WBS'),
+                                    React.createElement('th', { className: 'px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider' }, 'Task Name'),
+                                    React.createElement('th', { className: 'px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider' }, 'Status'),
+                                    React.createElement('th', { className: 'px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider' }, 'Progress'),
+                                    React.createElement('th', { className: 'px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider' }, 'Start Date'),
+                                    React.createElement('th', { className: 'px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider' }, 'End Date'),
+                                    React.createElement('th', { className: 'px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider' }, 'Assigned To')
+                                )
+                            ),
+                            React.createElement('tbody', { className: 'bg-white divide-y divide-gray-200' },
+                                isLoadingData ? React.createElement('tr', null,
+                                    React.createElement('td', { colSpan: 7, className: 'px-6 py-4 text-center text-gray-500' }, 'Loading deliverables...')
+                                ) : clientViewTasks.length === 0 ? React.createElement('tr', null,
+                                    React.createElement('td', { colSpan: 7, className: 'px-6 py-4 text-center text-gray-500' }, 'No deliverables available.')
+                                ) : (() => {
+                                    const flattenTasks = (taskList, level = 0) => {
+                                        if (!taskList) return [];
+                                        let flat = [];
+                                        taskList.forEach(task => {
+                                            if (task.is_client_deliverable || task.isClientDeliverable) {
+                                                flat.push({ ...task, level });
+                                            }
+                                            if (task.subtasks) {
+                                                flat = flat.concat(flattenTasks(task.subtasks, level + 1));
+                                            }
+                                        });
+                                        return flat;
+                                    };
+                                    return flattenTasks(clientViewTasks).map((task, index) => React.createElement('tr', { key: index, className: 'hover:bg-gray-50' },
+                                        React.createElement('td', { className: 'px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900', style: { paddingLeft: `${task.level * 20 + 24}px` } }, task.wbs || ''),
+                                        React.createElement('td', { className: 'px-6 py-4 text-sm text-gray-900' }, task.taskName || ''),
+                                        React.createElement('td', { className: 'px-6 py-4 whitespace-nowrap text-sm text-gray-500' },
+                                            React.createElement('span', { className: `px-2 py-1 text-xs font-semibold rounded-full ${
+                                                task.status === 'Completed' ? 'bg-green-100 text-green-700' :
+                                                task.status === 'In Progress' ? 'bg-blue-100 text-blue-700' :
+                                                task.status === 'Delayed' ? 'bg-red-100 text-red-700' :
+                                                'bg-gray-100 text-gray-700'
+                                            }` }, task.status || 'Not Started')
+                                        ),
+                                        React.createElement('td', { className: 'px-6 py-4 whitespace-nowrap text-sm text-gray-500' },
+                                            React.createElement('div', { className: 'flex items-center' },
+                                                React.createElement('div', { className: 'w-full bg-gray-200 rounded-full h-2 mr-2' },
+                                                    React.createElement('div', {
+                                                        className: 'bg-gradient-to-r from-pink-500 to-violet-600 h-2 rounded-full',
+                                                        style: { width: `${task.progress || 0}%` }
+                                                    })
+                                                ),
+                                                React.createElement('span', { className: 'text-xs' }, `${task.progress || 0}%`)
+                                            )
+                                        ),
+                                        React.createElement('td', { className: 'px-6 py-4 whitespace-nowrap text-sm text-gray-500' }, task.plannedStartDate || ''),
+                                        React.createElement('td', { className: 'px-6 py-4 whitespace-nowrap text-sm text-gray-500' }, task.plannedEndDate || ''),
+                                        React.createElement('td', { className: 'px-6 py-4 whitespace-nowrap text-sm text-gray-500' }, task.assignedTo || '')
+                                    ));
+                                })()
+                            )
+                        )
+                    )
+                );
+            } else if (activeTab === 'communication') {
+                // Render communication interface (copied from communication_tab.html)
+                return React.createElement('div', { className: 'space-y-4' },
+                    React.createElement('h2', { className: 'text-xl font-semibold text-gray-900' }, 'Communication'),
+                    React.createElement('div', { className: 'client-message-thread space-y-4' },
+                        isLoadingData ? React.createElement('div', { className: 'text-center py-10 text-gray-500' }, 'Loading messages...') :
+                        messages.length === 0 ? React.createElement('div', { className: 'text-center py-10 text-gray-500' }, 'No messages yet.') :
+                        messages.map((message, index) => React.createElement('div', {
+                            key: index,
+                            className: `p-4 rounded-lg ${message.fromClient ? 'bg-pink-50 ml-auto' : 'bg-violet-50 mr-auto'} max-w-2xl`
+                        },
+                            React.createElement('div', { className: 'flex justify-between items-start mb-2' },
+                                React.createElement('span', { className: 'font-semibold text-sm' }, message.fromClient ? 'You' : 'Admin'),
+                                React.createElement('span', { className: 'text-xs text-gray-500' }, new Date(message.timestamp || message.created_at).toLocaleString())
+                            ),
+                            React.createElement('p', { className: 'text-sm text-gray-700' }, message.comment || message.message || '')
+                        ))
+                    ),
+                    React.createElement('div', { className: 'mt-4 p-4 bg-white rounded-lg border' },
+                        React.createElement('textarea', {
+                            placeholder: 'Type your message...',
+                            className: 'w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:outline-none mb-2',
+                            rows: 3
+                        }),
+                        React.createElement('button', {
+                            onClick: () => alert('Send message functionality - integrate from communication_tab.html'),
+                            className: 'px-4 py-2 bg-gradient-to-r from-pink-500 to-violet-600 text-white rounded-lg hover:from-pink-600 hover:to-violet-700 transition-colors font-semibold'
+                        }, 'Send Message')
+                    )
+                );
+            } else if (activeTab === 'documents') {
+                // Render document grid (read-only, copied from documents_tab.html)
+                return React.createElement('div', { className: 'space-y-4' },
+                    React.createElement('h2', { className: 'text-xl font-semibold text-gray-900' }, 'Documents'),
+                    React.createElement('div', { className: 'client-document-grid grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4' },
+                        isLoadingData ? React.createElement('div', { className: 'col-span-full text-center py-10 text-gray-500' }, 'Loading documents...') :
+                        documents.length === 0 ? React.createElement('div', { className: 'col-span-full text-center py-10 text-gray-500' }, 'No documents available.') :
+                        documents.map((doc, index) => React.createElement('div', {
+                            key: index,
+                            className: 'bg-white rounded-lg shadow p-4 hover:shadow-lg transition-shadow'
+                        },
+                            React.createElement('div', { className: 'document-preview-icon w-16 h-16 mx-auto mb-2 bg-gradient-to-br from-pink-400 to-violet-500 rounded-lg flex items-center justify-center text-white text-2xl font-bold' },
+                                doc.file_type === 'pdf' ? 'PDF' : doc.file_type === 'doc' || doc.file_type === 'docx' ? 'DOC' : doc.file_type === 'xls' || doc.file_type === 'xlsx' ? 'XLS' : 'FILE'
+                            ),
+                            React.createElement('div', { className: 'text-sm font-medium text-gray-900 mb-1 truncate' }, doc.filename || doc.name),
+                            React.createElement('div', { className: 'text-xs text-gray-500 mb-2' }, new Date(doc.upload_date || doc.created_at).toLocaleDateString()),
+                            React.createElement('button', {
+                                onClick: async () => {
+                                    try {
+                                        const filename = doc.filename || doc.name;
+                                        const taskId = doc.task_id || 'general';
+                                        const response = await makeAuthenticatedRequest(
+                                            `/download_document/${encodeURIComponent(selectedProject)}/${encodeURIComponent(taskId)}/${encodeURIComponent(filename)}`,
+                                            { method: 'GET' }
+                                        );
+                                        if (!response.ok) {
+                                            if (response.status === 403) {
+                                                alert("Access denied. You don't have permission to download this file.");
+                                                return;
+                                            }
+                                            if (response.status === 404) {
+                                                alert('File not found.');
+                                                return;
+                                            }
+                                            throw new Error('Download failed');
+                                        }
+                                        const blob = await response.blob();
+                                        const url = URL.createObjectURL(blob);
+                                        const link = document.createElement('a');
+                                        link.href = url;
+                                        link.download = filename;
+                                        document.body.appendChild(link);
+                                        link.click();
+                                        document.body.removeChild(link);
+                                        URL.revokeObjectURL(url);
+                                    } catch (err) {
+                                        alert(`Download error: ${err.message}`);
+                                    }
+                                },
+                                className: 'w-full px-3 py-2 bg-gradient-to-r from-pink-500 to-violet-600 text-white text-sm rounded-lg hover:from-pink-600 hover:to-violet-700 transition-colors font-semibold'
+                            }, 'Download')
+                        ))
+                    )
+                );
+            }
+            return null;
+        };
+        
+        return React.createElement('div', { className: 'client-tab-content p-6' },
+            error && React.createElement('div', { className: 'mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm' },
+                React.createElement('button', { onClick: () => setError(null), className: 'float-right' }, '×'),
+                error
+            ),
+            // Project selector (rendered declaratively via React)
+            projects.length > 1 && React.createElement('div', { className: 'mb-4' },
+                React.createElement('label', { className: 'block text-sm font-medium text-gray-700 mb-1' }, 'Project:'),
+                React.createElement('select', {
+                    value: selectedProject,
+                    onChange: (e) => setSelectedProject(e.target.value),
+                    className: 'px-3 py-2 bg-white/20 border border-white/30 rounded-lg text-gray-900 text-sm focus:ring-2 focus:ring-pink-500 focus:outline-none'
+                },
+                    projects.map(project => React.createElement('option', { key: project.name, value: project.name }, project.name))
+                )
+            ),
+            renderTabContent()
+        );
+    };
+</script>
+

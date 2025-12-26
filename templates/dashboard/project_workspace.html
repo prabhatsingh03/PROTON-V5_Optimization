@@ -1,0 +1,265 @@
+{% extends "dashboard/base.html" %}
+
+{% block title %}Project Workspace - PROTON{% endblock %}
+
+{% block header %}
+<div class="bg-gradient-to-r from-teal-500 to-blue-600 text-white p-6 rounded-lg mb-4">
+    <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+        <div>
+            <nav class="text-sm text-teal-100 mb-2" aria-label="Breadcrumb">
+                <ol class="flex items-center space-x-2">
+                    <li><a href="/dashboard" class="hover:text-white">Dashboard</a></li>
+                    <li><span class="mx-2">/</span></li>
+                    <li><a href="/dashboard/projects" class="hover:text-white">Projects</a></li>
+                    <li><span class="mx-2">/</span></li>
+                    <li class="text-white font-semibold" id="project-name-breadcrumb">Project Workspace</li>
+                </ol>
+            </nav>
+            <h1 class="text-2xl sm:text-3xl font-bold" id="project-name-header">Project Workspace</h1>
+        </div>
+        <div class="flex gap-2">
+            <button class="px-4 py-2 bg-white/20 hover:bg-white/30 rounded-lg text-sm font-semibold transition-colors">
+                Save
+            </button>
+            <button class="px-4 py-2 bg-white/20 hover:bg-white/30 rounded-lg text-sm font-semibold transition-colors">
+                Export
+            </button>
+            <button class="px-4 py-2 bg-white/20 hover:bg-white/30 rounded-lg text-sm font-semibold transition-colors">
+                Settings
+            </button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block content %}
+<!-- Tab Navigation Bar -->
+<div class="workspace-tabs sticky top-0 z-20 bg-white shadow-md mb-4 rounded-lg overflow-x-auto">
+    <div class="flex space-x-1 p-2 min-w-max">
+        <button class="workspace-tab active" data-tab="overview" onclick="handleTabChange('overview')">
+            Overview
+        </button>
+        <button class="workspace-tab" data-tab="wbs" onclick="handleTabChange('wbs')">
+            Tasks (WBS)
+        </button>
+        <button class="workspace-tab" data-tab="gantt" onclick="handleTabChange('gantt')">
+            Gantt
+        </button>
+        <button class="workspace-tab" data-tab="ai-insights" onclick="handleTabChange('ai-insights')">
+            AI Insights
+        </button>
+        <button class="workspace-tab" data-tab="documents" onclick="handleTabChange('documents')">
+            Documents
+        </button>
+        <button class="workspace-tab" data-tab="communication" onclick="handleTabChange('communication')">
+            Communication
+        </button>
+        <button class="workspace-tab" data-tab="team-permissions" onclick="handleTabChange('team-permissions')">
+            Team & Permissions
+        </button>
+    </div>
+</div>
+
+<!-- Tab Content Area -->
+<div class="workspace-tab-content">
+    <div id="workspace-root" data-project-id="{{ project_id }}">
+        <!-- Skeleton Loader (Overview Tab) -->
+        <div class="animate-pulse space-y-6">
+            <!-- Top Stats Cards -->
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                {% for i in range(4) %}
+                <div class="bg-white rounded-xl shadow-sm p-6 border border-slate-100">
+                    <div class="h-4 w-24 bg-slate-200 rounded mb-4"></div>
+                    <div class="h-8 w-16 bg-slate-200 rounded"></div>
+                </div>
+                {% endfor %}
+            </div>
+            <!-- Main Content Area -->
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <!-- Left Column (Chart/Details) -->
+                <div class="lg:col-span-2 space-y-6">
+                    <div class="bg-white rounded-xl shadow-sm p-6 border border-slate-100 h-96">
+                        <div class="h-6 w-48 bg-slate-200 rounded mb-6"></div>
+                        <div class="h-64 bg-slate-200 rounded w-full"></div>
+                    </div>
+                    <div class="bg-white rounded-xl shadow-sm p-6 border border-slate-100 h-64">
+                        <div class="h-6 w-32 bg-slate-200 rounded mb-6"></div>
+                        <div class="space-y-4">
+                            <div class="h-4 w-full bg-slate-200 rounded"></div>
+                            <div class="h-4 w-full bg-slate-200 rounded"></div>
+                            <div class="h-4 w-2/3 bg-slate-200 rounded"></div>
+                        </div>
+                    </div>
+                </div>
+                <!-- Right Column (Activity/Team) -->
+                <div class="space-y-6">
+                    <div class="bg-white rounded-xl shadow-sm p-6 border border-slate-100 h-80">
+                        <div class="h-6 w-32 bg-slate-200 rounded mb-6"></div>
+                        <div class="space-y-4">
+                            {% for i in range(3) %}
+                            <div class="flex items-center gap-3">
+                                <div class="h-8 w-8 rounded-full bg-slate-200"></div>
+                                <div class="h-4 w-32 bg-slate-200 rounded"></div>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    <div class="bg-white rounded-xl shadow-sm p-6 border border-slate-100 h-64">
+                        <div class="h-6 w-32 bg-slate-200 rounded mb-6"></div>
+                        <div class="h-full bg-slate-200 rounded"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Workspace access validation UI states -->
+    <div id="workspace-access-overlay"
+        class="fixed inset-0 bg-gray-900 bg-opacity-40 flex items-center justify-center z-30 hidden">
+        <div class="bg-white rounded-lg shadow-lg p-6 max-w-md w-full text-center">
+            <h2 class="text-lg font-semibold mb-2">Validating project access…</h2>
+            <p class="text-sm text-gray-600">Please wait while we verify your permissions for this workspace.</p>
+        </div>
+    </div>
+
+    <div id="workspace-access-error"
+        class="fixed inset-0 bg-gray-900 bg-opacity-40 flex items-center justify-center z-40 hidden">
+        <div class="bg-white rounded-lg shadow-lg p-6 max-w-md w/full text-center">
+            <h2 class="text-lg font-semibold mb-2 text-red-600">Access denied</h2>
+            <p id="workspace-access-error-message" class="text-sm text-gray-700 mb-4">
+                You do not have permission to access this project. Redirecting to dashboard…
+            </p>
+            <p class="text-xs text-gray-500">If you believe this is a mistake, please contact your administrator.</p>
+        </div>
+    </div>
+</div>
+
+<script type="text/javascript">
+    // Tab switching handler (vanilla JS)
+    function handleTabChange(tabName) {
+        // Update active tab button
+        document.querySelectorAll('.workspace-tab').forEach(tab => {
+            tab.classList.remove('active');
+        });
+        const activeTab = document.querySelector(`[data-tab="${tabName}"]`);
+        if (activeTab) {
+            activeTab.classList.add('active');
+        }
+
+        // Update URL
+        const url = new URL(window.location);
+        url.searchParams.set('tab', tabName);
+        window.history.replaceState({}, '', url);
+
+        // Dispatch custom event for React component
+        window.dispatchEvent(new CustomEvent('workspaceTabChange', { detail: { tab: tabName } }));
+    }
+
+    // Simple JWT parser (mirrors pattern used in auth_config.js / auth.js)
+    function parseJwt(token) {
+        try {
+            const base64Url = token.split('.')[1];
+            const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+            const jsonPayload = decodeURIComponent(atob(base64).split('').map(function (c) {
+                return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
+            }).join(''));
+            return JSON.parse(jsonPayload);
+        } catch (e) {
+            return null;
+        }
+    }
+
+    // Client-side project access validation for workspace
+    document.addEventListener('DOMContentLoaded', function () {
+        const workspaceRoot = document.getElementById('workspace-root');
+        if (!workspaceRoot) {
+            return;
+        }
+
+        const projectId = workspaceRoot.getAttribute('data-project-id');
+        const overlay = document.getElementById('workspace-access-overlay');
+        const errorDialog = document.getElementById('workspace-access-error');
+        const errorMessageEl = document.getElementById('workspace-access-error-message');
+
+        // Helper to show/hide overlay
+        function showOverlay() {
+            if (overlay) {
+                overlay.classList.remove('hidden');
+            }
+        }
+
+        function hideOverlay() {
+            if (overlay) {
+                overlay.classList.add('hidden');
+            }
+        }
+
+        function showError(message) {
+            if (errorMessageEl && message) {
+                errorMessageEl.textContent = message;
+            }
+            if (errorDialog) {
+                errorDialog.classList.remove('hidden');
+            }
+        }
+
+        // Ensure we have auth tokens; rely on the same storage keys used elsewhere
+        const accessToken = window.localStorage.getItem('access_token');
+        const userDataRaw = window.localStorage.getItem('user_data');
+
+        if (!accessToken || !userDataRaw) {
+            // No authentication – defer to global auth_config.html pattern (redirect to /)
+            window.location.href = '/';
+            return;
+        }
+
+        // Perform a quick client-side role/project sanity check for clients
+        const payload = parseJwt(accessToken);
+        const role = payload && payload.role;
+        const clientProject = payload && payload.project;
+
+        if (role === 'client' && clientProject && projectId && clientProject !== projectId) {
+            showError('You do not have permission to access this client workspace. Redirecting to dashboard…');
+            setTimeout(function () {
+                window.location.href = '/dashboard';
+            }, 2000);
+            return;
+        }
+
+        // Call server-side validation API before allowing interaction
+        showOverlay();
+
+        fetch('/api/workspace/' + encodeURIComponent(projectId) + '/validate', {
+            method: 'GET',
+            headers: {
+                'Authorization': 'Bearer ' + accessToken,
+                'Accept': 'application/json'
+            }
+        })
+            .then(function (response) {
+                if (!response.ok) {
+                    return response.json().catch(function () {
+                        return { status: 'error', message: 'Unable to validate project access.' };
+                    }).then(function (data) {
+                        throw new Error(data.message || 'Unable to validate project access.');
+                    });
+                }
+                return response.json();
+            })
+            .then(function (data) {
+                if (data.status !== 'success') {
+                    throw new Error(data.message || 'Unable to validate project access.');
+                }
+                // Validation succeeded; hide overlay and allow normal workspace interaction
+                hideOverlay();
+            })
+            .catch(function (err) {
+                console.error('Workspace access validation failed:', err);
+                showError(err && err.message ? err.message : 'You do not have permission to access this project. Redirecting to dashboard…');
+                setTimeout(function () {
+                    window.location.href = '/dashboard';
+                }, 2000);
+            });
+    });
+</script>
+{% endblock %}

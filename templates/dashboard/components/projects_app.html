@@ -1,0 +1,442 @@
+<script type="text/babel">
+  const ProjectsApp = () => {
+    const { useState, useEffect, useMemo, useCallback } = React;
+
+    // --- Auth & App State (adapted from main_app.html) ---
+    const [loggedInUser, setLoggedInUser] = useState(null);
+    const [projects, setProjects] = useState([]);
+    const [isLoading, setIsLoading] = useState(true);
+    const [appError, setAppError] = useState(null);
+    const [notification, setNotification] = useState(null);
+
+    const [viewMode, setViewMode] = useState('grid');
+    const [searchTerm, setSearchTerm] = useState('');
+    const [showAddProjectModal, setShowAddProjectModal] = useState(false);
+
+    // Centralized API 403 handler (copied from main_app.html)
+    const handleAPIError = (response, data) => {
+      if (response && response.status === 403) {
+        const msg = (loggedInUser && loggedInUser.role === 'org_user')
+          ? 'This action requires Org Admin privileges.'
+          : (data && data.message) || 'You do not have permission to perform this action.';
+        setAppError(msg);
+        return true;
+      }
+      return false;
+    };
+
+    // Decode auth data & JWT (copied from main_app.html auth section)
+    useEffect(() => {
+      const accessToken = localStorage.getItem('access_token');
+      const userData = localStorage.getItem('user_data');
+
+      if (accessToken && userData) {
+        try {
+          const authData = JSON.parse(userData);
+
+          let userRole = 'org_user';
+          let orgId = null;
+          let plan = null;
+
+          try {
+            const payload = accessToken.split('.')[1];
+            const decodedPayload = JSON.parse(decodeBase64Url(payload));
+            userRole = decodedPayload.role || 'org_user';
+            orgId = decodedPayload.org_id || null;
+            plan = decodedPayload.plan || null;
+          } catch (jwtError) {
+            console.warn('Failed to parse JWT token:', jwtError);
+            if (authData.userType === 'admin') {
+              userRole = 'org_admin';
+            }
+          }
+
+          const enhancedAuthData = {
+            ...authData,
+            role: userRole,
+            org_id: orgId,
+            plan: plan
+          };
+
+          setLoggedInUser(enhancedAuthData);
+          try {
+            window.loggedInUser = enhancedAuthData;
+            window.showNotification = ({ message, type = 'info', action, duration }) => {
+              setNotification({ message, type, action, duration });
+            };
+          } catch (e) {}
+        } catch (e) {
+          // Handle JSON.parse errors or any other errors in auth processing
+          localStorage.removeItem('access_token');
+          localStorage.removeItem('refresh_token');
+          localStorage.removeItem('user_data');
+          setAppError('Authentication data is invalid. Please sign in again.');
+          setIsLoading(false);
+        }
+      } else {
+        localStorage.removeItem('aiProjectControlTowerAuth_v2');
+        setIsLoading(false);
+      }
+    }, []);
+
+    // Load projects (copied from main_app.html project loading useEffect)
+    useEffect(() => {
+      if (!loggedInUser) return;
+
+      setIsLoading(true);
+      makeAuthenticatedRequest('/api/projects', {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' }
+      })
+        .then(res => res.json())
+        .then(data => {
+          // Handle error responses (non-array) and ensure projects is always an array
+          if (Array.isArray(data)) {
+            setProjects(data);
+          } else if (data && data.status === 'error') {
+            console.error('Projects API error:', data.message);
+            setAppError(data.message || 'Could not load projects list.');
+            setProjects([]);
+          } else {
+            setProjects([]);
+          }
+        })
+        .catch(err => {
+          console.error('Could not load projects list:', err);
+          setAppError('Could not load projects list.');
+          setProjects([]);
+        })
+        .finally(() => {
+          setIsLoading(false);
+        });
+    }, [loggedInUser]);
+
+    // Add project handler (copied from main_app.html lines 674-700, adapted to return a promise)
+    const handleAddProject = (name, code) => {
+      return new Promise((resolve, reject) => {
+        const usage = window.latestUsageStats;
+        if (usage && usage.at_limit && usage.at_limit.projects) {
+          const msg = 'You have reached the maximum number of projects allowed by your plan.';
+          alert(msg);
+          if (typeof window.refreshUsageStats === 'function') window.refreshUsageStats();
+          reject(new Error(msg));
+          return;
+        }
+
+        makeAuthenticatedRequest('/api/projects', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ project_name: name, client_access_code: code })
+        })
+          .then(async res => {
+            const data = await res.json();
+            if (handleAPIError(res, data)) {
+              throw new Error(data && data.message ? data.message : 'Permission denied.');
+            }
+            if (!res.ok) {
+              throw new Error((data && data.message) || 'Could not add project.');
+            }
+            return data;
+          })
+          .then(data => {
+            if (data && data.status === 'success') {
+              setProjects(prev => [...prev, data.project]);
+              setNotification({ message: 'Project added!', type: 'success' });
+              resolve(true);
+            } else if (data) {
+              throw new Error(data.message || 'Could not add project.');
+            } else {
+              throw new Error('Could not add project.');
+            }
+          })
+          .catch(err => {
+            setAppError(err.message);
+            reject(err);
+          });
+      });
+    };
+
+    // Expose global event for header button
+    useEffect(() => {
+      const openHandler = () => setShowAddProjectModal(true);
+      window.addEventListener('openAddProjectModal', openHandler);
+      return () => window.removeEventListener('openAddProjectModal', openHandler);
+    }, []);
+
+    // View toggle & search handlers
+    const handleViewToggle = (mode) => {
+      setViewMode(mode);
+    };
+
+    const handleSearchChange = (e) => {
+      setSearchTerm(e.target.value);
+    };
+
+    const handleProjectClick = useCallback((project) => {
+      if (!project || !project.id) return;
+      window.location.href = `/dashboard/workspace/${encodeURIComponent(project.id)}`;
+    }, []);
+
+    const handleOpenReports = useCallback((project) => {
+      if (!project || !project.id) return;
+      const params = new URLSearchParams({ project_id: project.id });
+      window.location.href = `/dashboard/reports?${params.toString()}`;
+    }, []);
+
+    const handleOpenGantt = useCallback((project) => {
+      if (!project || !project.id) return;
+      window.location.href = `/dashboard/workspace/${encodeURIComponent(project.id)}#gantt`;
+    }, []);
+
+    // Filtered projects
+    const filteredProjects = useMemo(() => {
+      const term = (searchTerm || '').toLowerCase();
+      if (!term) return projects;
+      return projects.filter(p =>
+        (p.name || '').toLowerCase().includes(term) ||
+        (p.client_access_code || '').toLowerCase().includes(term)
+      );
+    }, [projects, searchTerm]);
+
+    // Auto-clear error after a few seconds
+    useEffect(() => {
+      if (!appError) return;
+      const t = setTimeout(() => setAppError(null), 7000);
+      return () => clearTimeout(t);
+    }, [appError]);
+
+    // --- Subcomponents ---
+    const AddProjectModal = ({ onClose, onAdd }) => {
+      const [name, setName] = useState('');
+      const [code, setCode] = useState('');
+      const [error, setError] = useState(null);
+      const [submitting, setSubmitting] = useState(false);
+
+      const handleSubmit = async (e) => {
+        e.preventDefault();
+        setError(null);
+
+        if (!name || name.trim().length < 2) {
+          setError('Project name must be at least 2 characters.');
+          return;
+        }
+
+        if (!code || !code.trim()) {
+          setError('Client access code is required.');
+          return;
+        }
+
+        setSubmitting(true);
+        try {
+          await onAdd(name.trim(), code.trim());
+          onClose();
+        } catch (err) {
+          setError(err.message || 'Could not add project.');
+        } finally {
+          setSubmitting(false);
+        }
+      };
+
+      return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-40">
+          <div className="bg-white rounded-xl shadow-2xl max-w-md w-full mx-4 modal-content">
+            <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between">
+              <h2 className="text-lg font-semibold text-slate-900">Add New Project</h2>
+              <button
+                type="button"
+                className="text-slate-400 hover:text-slate-600"
+                onClick={onClose}
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleSubmit} className="px-6 py-5 space-y-4">
+              {error && (
+                <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-md px-3 py-2">
+                  {error}
+                </div>
+              )}
+
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">
+                  Project Name
+                </label>
+                <input
+                  type="text"
+                  className="projects-search-input w-full modal-input"
+                  value={name}
+                  onChange={e => setName(e.target.value)}
+                  placeholder="Enter project name"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">
+                  Client Access Code <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  className="projects-search-input w-full modal-input"
+                  value={code}
+                  onChange={e => setCode(e.target.value)}
+                  placeholder="Enter client access code (required)"
+                  required
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-3 pt-2">
+                <button
+                  type="button"
+                  className="px-4 py-2 text-sm font-medium text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg"
+                  onClick={onClose}
+                  disabled={submitting}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="btn-gradient-primary text-sm px-4 py-2"
+                  disabled={submitting}
+                >
+                  {submitting ? 'Adding...' : 'Add Project'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      );
+    };
+
+    // Notification toast (reuse global utility if present)
+    const NotificationToastInline = ({ message, type, onDismiss }) => {
+      if (!message) return null;
+      const base = "fixed top-4 right-4 z-40 px-4 py-3 rounded-lg shadow-lg text-sm notification-toast show ";
+      const typeClass =
+        type === 'success' ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' :
+        type === 'error' ? 'bg-red-50 text-red-800 border border-red-200' :
+        'bg-slate-50 text-slate-800 border border-slate-200';
+      return (
+        <div className={base + typeClass}>
+          <div className="flex items-start gap-3">
+            <div className="flex-1">{message}</div>
+            <button
+              type="button"
+              className="text-slate-400 hover:text-slate-600 ml-2"
+              onClick={onDismiss}
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      );
+    };
+
+    if (isLoading && !loggedInUser) {
+      return (
+        <div className="flex items-center justify-center py-20 text-slate-500">
+          Loading projects...
+        </div>
+      );
+    }
+
+    return (
+      <div className="space-y-4">
+        {notification && (
+          <NotificationToastInline
+            message={notification.message}
+            type={notification.type}
+            onDismiss={() => setNotification(null)}
+          />
+        )}
+
+        {appError && (
+          <div className="mb-2 px-4 py-3 rounded-md text-sm bg-red-50 border border-red-200 text-red-700">
+            <strong className="font-semibold">Error: </strong>{appError}
+          </div>
+        )}
+
+        {/* Top controls */}
+        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-4">
+          <input
+            type="text"
+            className="projects-search-input"
+            placeholder="Search projects by name or code..."
+            value={searchTerm}
+            onChange={handleSearchChange}
+          />
+
+          <div className="view-toggle-container">
+            <button
+              type="button"
+              className={`view-toggle-btn ${viewMode === 'grid' ? 'active' : ''}`}
+              onClick={() => handleViewToggle('grid')}
+            >
+              Grid
+            </button>
+            <button
+              type="button"
+              className={`view-toggle-btn ${viewMode === 'list' ? 'active' : ''}`}
+              onClick={() => handleViewToggle('list')}
+            >
+              List
+            </button>
+          </div>
+        </div>
+
+        {/* Projects Grid/List */}
+        {isLoading ? (
+          <div className="flex items-center justify-center py-16 text-slate-500">
+            Loading projects...
+          </div>
+        ) : filteredProjects.length === 0 ? (
+          <div className="projects-empty-state">
+            <div className="projects-empty-icon">
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className="w-full h-full text-slate-300"
+              >
+                <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                <path d="M3 9h18" />
+                <path d="M9 21V9" />
+              </svg>
+            </div>
+            <div className="projects-empty-text">No projects found</div>
+            <div className="projects-empty-subtext">
+              Create your first project to get started with PROTON.
+            </div>
+          </div>
+        ) : (
+          <div className={viewMode === 'grid' ? 'projects-grid' : 'projects-list'}>
+            {filteredProjects.map(project => (
+              <ProjectCard
+                key={project.id || project.name}
+                project={project}
+                onView={handleProjectClick}
+                onReport={handleOpenReports}
+                onGantt={handleOpenGantt}
+                viewMode={viewMode}
+              />
+            ))}
+          </div>
+        )}
+
+        {showAddProjectModal && (
+          <AddProjectModal
+            onClose={() => setShowAddProjectModal(false)}
+            onAdd={handleAddProject}
+          />
+        )}
+      </div>
+    );
+  };
+</script>
+
+

@@ -1,0 +1,73 @@
+{% extends 'dashboard/base.html' %}
+
+{% block title %}Client Portal - PROTON{% endblock %}
+
+{% block header %}
+<div class="bg-gradient-to-r from-pink-500 to-violet-600 text-white p-6 rounded-lg mb-4">
+    <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+        <div>
+            <h1 class="text-2xl sm:text-3xl font-bold">Client Portal</h1>
+            <p class="text-sm text-pink-100 mt-1">View deliverables, communicate with team, and access documents</p>
+        </div>
+        <div class="flex items-center gap-4">
+            <div class="px-4 py-2 bg-white/20 rounded-lg">
+                <span class="text-sm font-semibold">Client</span>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block content %}
+<!-- Tab Navigation -->
+<div class="client-tabs sticky top-0 z-20 bg-white shadow-md mb-4 rounded-lg overflow-x-auto">
+    <div class="flex space-x-1 p-2 min-w-max">
+        <button class="client-tab active" data-tab="deliverables" onclick="handleClientTabChange('deliverables')">
+            Deliverables
+        </button>
+        <button class="client-tab" data-tab="communication" onclick="handleClientTabChange('communication')">
+            Communication
+        </button>
+        <button class="client-tab" data-tab="documents" onclick="handleClientTabChange('documents')">
+            Documents
+        </button>
+    </div>
+</div>
+
+<!-- Tab Content Area -->
+<div class="client-tab-content">
+    <div id="client-view-root"></div>
+</div>
+
+<script type="text/javascript">
+    // Tab switching handler (vanilla JS)
+    function handleClientTabChange(tabName) {
+        // Update active tab button
+        document.querySelectorAll('.client-tab').forEach(tab => {
+            tab.classList.remove('active');
+        });
+        const activeTab = document.querySelector(`[data-tab="${tabName}"]`);
+        if (activeTab) {
+            activeTab.classList.add('active');
+        }
+        
+        // Update URL
+        const url = new URL(window.location);
+        url.searchParams.set('tab', tabName);
+        window.history.replaceState({}, '', url);
+        
+        // Dispatch custom event for React component
+        window.dispatchEvent(new CustomEvent('clientTabChange', { detail: { tab: tabName } }));
+    }
+    
+    // Restore active tab from URL on page load
+    window.addEventListener('DOMContentLoaded', () => {
+        const urlParams = new URLSearchParams(window.location.search);
+        const tab = urlParams.get('tab');
+        if (tab) {
+            handleClientTabChange(tab);
+        }
+    });
+</script>
+{% endblock %}
+

@@ -1,0 +1,107 @@
+{% extends 'dashboard/base.html' %}
+
+{% block title %}Admin Panel - PROTON{% endblock %}
+
+{% block header %}
+<div class="bg-gradient-to-r from-blue-500 to-purple-600 text-white p-6 rounded-lg mb-4">
+    <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+        <div>
+            <h1 class="text-2xl sm:text-3xl font-bold">Admin Panel</h1>
+            <p class="text-sm text-blue-100 mt-1">Manage users, organization settings, and subscriptions</p>
+        </div>
+        <div id="role-badge-container" class="px-4 py-2 bg-white/20 rounded-lg">
+            <span class="text-sm font-semibold" id="role-badge-text">Loading...</span>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block content %}
+<!-- Tab Navigation -->
+<div class="admin-tabs sticky top-0 z-20 bg-white shadow-md mb-4 rounded-lg overflow-x-auto">
+    <div class="flex space-x-1 p-2 min-w-max">
+        <button class="admin-tab active" data-tab="users" onclick="handleAdminTabChange('users')">
+            User Management
+        </button>
+        <button class="admin-tab" data-tab="settings" onclick="handleAdminTabChange('settings')">
+            Organization Settings
+        </button>
+        <button class="admin-tab" data-tab="subscription" onclick="handleAdminTabChange('subscription')">
+            Subscription Management
+        </button>
+        <button class="admin-tab" data-tab="logs" onclick="handleAdminTabChange('logs')">
+            Activity Logs
+        </button>
+        <button class="admin-tab" data-tab="approvals" onclick="handleAdminTabChange('approvals')" id="approvals-tab"
+            style="display: none;">
+            Pending Approvals
+        </button>
+    </div>
+</div>
+
+<!-- Tab Content Area -->
+<div class="admin-tab-content">
+    <div id="admin-panel-root">
+        <!-- Skeleton Loader (User Management View) -->
+        <div class="bg-white rounded-lg shadow animate-pulse">
+            <!-- Toolbar Skeleton -->
+            <div class="p-4 border-b border-gray-200 flex justify-between items-center">
+                <div class="h-10 w-64 bg-slate-200 rounded"></div>
+                <div class="h-10 w-32 bg-slate-200 rounded"></div>
+            </div>
+            <!-- Table Skeleton -->
+            <div class="p-6">
+                <div class="space-y-4">
+                    <!-- Header -->
+                    <div class="flex gap-4 pb-4 border-b border-gray-100">
+                        <div class="h-4 w-1/4 bg-slate-200 rounded"></div>
+                        <div class="h-4 w-1/4 bg-slate-200 rounded"></div>
+                        <div class="h-4 w-1/4 bg-slate-200 rounded"></div>
+                        <div class="h-4 w-1/4 bg-slate-200 rounded"></div>
+                    </div>
+                    <!-- Rows -->
+                    {% for i in range(5) %}
+                    <div class="flex gap-4 py-4 border-b border-gray-50">
+                        <div class="h-4 w-1/4 bg-slate-200 rounded"></div>
+                        <div class="h-4 w-1/4 bg-slate-200 rounded"></div>
+                        <div class="h-4 w-1/4 bg-slate-200 rounded"></div>
+                        <div class="h-4 w-1/4 bg-slate-200 rounded"></div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script type="text/javascript">
+    // Tab switching handler (vanilla JS)
+    function handleAdminTabChange(tabName) {
+        // Update active tab button
+        document.querySelectorAll('.admin-tab').forEach(tab => {
+            tab.classList.remove('active');
+        });
+        const activeTab = document.querySelector(`[data-tab="${tabName}"]`);
+        if (activeTab) {
+            activeTab.classList.add('active');
+        }
+
+        // Update URL
+        const url = new URL(window.location);
+        url.searchParams.set('tab', tabName);
+        window.history.replaceState({}, '', url);
+
+        // Dispatch custom event for React component
+        window.dispatchEvent(new CustomEvent('adminTabChange', { detail: { tab: tabName } }));
+    }
+
+    // Restore active tab from URL on page load
+    window.addEventListener('DOMContentLoaded', () => {
+        const urlParams = new URLSearchParams(window.location.search);
+        const tab = urlParams.get('tab');
+        if (tab) {
+            handleAdminTabChange(tab);
+        }
+    });
+</script>
+{% endblock %}

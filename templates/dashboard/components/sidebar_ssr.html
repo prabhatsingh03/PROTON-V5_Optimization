@@ -1,0 +1,347 @@
+<!-- Sidebar SSR Implementation -->
+<aside id="app-sidebar" class="sidebar">
+    <style>
+        /* Scoped styles for SSR sidebar transitions */
+        .sidebar-nav-item {
+            white-space: nowrap;
+            overflow: hidden;
+        }
+
+        .nav-text {
+            opacity: 1;
+            transition: opacity 0.2s ease-in-out;
+        }
+
+        .sidebar.collapsed .nav-text {
+            display: none;
+            opacity: 0;
+        }
+
+        .sidebar.collapsed #usage-stats-container {
+            display: none;
+        }
+
+        .sidebar.collapsed .logo-subtitle {
+            display: none;
+        }
+
+        /* Ensure icons are sized correctly */
+        .sidebar-nav-item-icon {
+            min-width: 20px;
+            /* Prevent icon shrinking */
+        }
+    </style>
+
+    <!-- Sidebar Header -->
+    <div class="sidebar-header">
+        <div class="logo-container flex items-center gap-3 px-2">
+            <img src="/static/logo.png" alt="Proton Logo" class="w-8 h-8 object-contain">
+            <div>
+                <div class="sidebar-logo text-xl font-bold tracking-wider text-white">PROTON</div>
+                <div class="text-[10px] text-slate-400 logo-subtitle leading-tight">Project Management</div>
+            </div>
+        </div>
+        <div class="logo-container-collapsed hidden flex justify-center w-full">
+            <img src="/static/logo.png" alt="Proton Logo" class="w-8 h-8 object-contain">
+        </div>
+
+        <!-- Toggle Button -->
+        <button id="sidebar-toggle" class="sidebar-toggle-btn" title="Toggle Sidebar">
+            <svg id="icon-chevron-left" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24"
+                fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="15 18 9 12 15 6" />
+            </svg>
+            <svg id="icon-chevron-right" class="hidden" xmlns="http://www.w3.org/2000/svg" width="18" height="18"
+                viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                stroke-linejoin="round">
+                <polyline points="9 18 15 12 9 6" />
+            </svg>
+        </button>
+    </div>
+
+    <!-- Sidebar Navigation -->
+    <nav class="sidebar-nav">
+        <!-- Dashboard -->
+        <a href="/dashboard" class="sidebar-nav-item {% if request.path == '/dashboard' %}active{% endif %}"
+            title="Dashboard">
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                class="sidebar-nav-item-icon">
+                <path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+                <polyline points="9 22 9 12 15 12 15 22" />
+            </svg>
+            <span class="nav-text">Dashboard</span>
+        </a>
+
+        <!-- Project Overview -->
+        <a href="/dashboard/projects"
+            class="sidebar-nav-item {% if request.path.startswith('/dashboard/projects') %}active{% endif %}"
+            title="Project Overview">
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                class="sidebar-nav-item-icon">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+            </svg>
+            <span class="nav-text">Project Overview</span>
+        </a>
+
+        <!-- Reports -->
+        <a href="/dashboard/reports"
+            class="sidebar-nav-item {% if request.path.startswith('/dashboard/reports') %}active{% endif %}"
+            title="Reports">
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                class="sidebar-nav-item-icon">
+                <line x1="12" x2="12" y1="20" y2="10" />
+                <line x1="18" x2="18" y1="20" y2="4" />
+                <line x1="6" x2="6" y1="20" y2="16" />
+            </svg>
+            <span class="nav-text">Reports</span>
+        </a>
+
+        <!-- Admin Panel (Hidden by default, shown via JS) -->
+        <a href="/dashboard/admin" id="nav-admin"
+            class="sidebar-nav-item hidden {% if request.path.startswith('/dashboard/admin') %}active{% endif %}"
+            title="Admin Panel">
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                class="sidebar-nav-item-icon">
+                <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+                <circle cx="9" cy="7" r="4" />
+                <circle cx="19" cy="11.5" r="1.5" />
+                <path d="M19 8.25V10" />
+                <path d="M19 13v1.75" />
+                <path d="m21.56 9.44-1.25.72" />
+                <path d="m16.44 13.56-1.25.72" />
+                <path d="m21.56 13.56-1.25-.72" />
+                <path d="m16.44 9.44-1.25-.72" />
+            </svg>
+            <span class="nav-text">Admin Panel</span>
+        </a>
+
+        <!-- Client View (Hidden by default, shown via JS) -->
+        <a href="/dashboard/client-view" id="nav-client"
+            class="sidebar-nav-item hidden {% if request.path.startswith('/dashboard/client-view') %}active{% endif %}"
+            title="Client View">
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                class="sidebar-nav-item-icon">
+                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                <circle cx="12" cy="12" r="3" />
+            </svg>
+            <span class="nav-text">Client View</span>
+        </a>
+    </nav>
+
+    <!-- Sidebar Footer -->
+    <div id="sidebar-footer" class="px-4 pb-4">
+        <!-- Usage Stats Widget -->
+        <div id="usage-stats-container"></div>
+
+        <button id="logout-btn"
+            class="btn-gradient-secondary w-full mt-3 text-sm flex items-center justify-center gap-2">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+                <polyline points="16 17 21 12 16 7" />
+                <line x1="21" y1="12" x2="9" y2="12" />
+            </svg>
+            <span class="nav-text">Logout</span>
+        </button>
+    </div>
+</aside>
+
+<!-- Mobile Overlay -->
+<div id="sidebar-overlay" class="sidebar-overlay"></div>
+
+<!-- Mobile Toggle Button (Visible on small screens) -->
+<button id="mobile-toggle-btn"
+    class="fixed top-4 left-4 z-50 md:hidden bg-slate-800 text-white p-2 rounded-lg shadow-lg">
+    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+        stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="3" y1="12" x2="21" y2="12" />
+        <line x1="3" y1="6" x2="21" y2="6" />
+        <line x1="3" y1="18" x2="21" y2="18" />
+    </svg>
+</button>
+
+<script>
+    (function () {
+        const sidebar = document.getElementById('app-sidebar');
+        const sidebarToggle = document.getElementById('sidebar-toggle');
+        const mobileToggle = document.getElementById('mobile-toggle-btn');
+        const overlay = document.getElementById('sidebar-overlay');
+        const logoContainer = document.querySelector('.logo-container');
+        const logoContainerCollapsed = document.querySelector('.logo-container-collapsed');
+        const iconChevronLeft = document.getElementById('icon-chevron-left');
+        const iconChevronRight = document.getElementById('icon-chevron-right');
+        const sidebarFooter = document.getElementById('sidebar-footer');
+        const logoutBtn = document.getElementById('logout-btn');
+        const usageStatsContainer = document.getElementById('usage-stats-container');
+
+        // --- 1. Collapse State Management ---
+        function setCollapsed(isCollapsed) {
+            if (isCollapsed) {
+                sidebar.classList.add('collapsed');
+                logoContainer.classList.add('hidden');
+                logoContainerCollapsed.classList.remove('hidden');
+                iconChevronLeft.classList.add('hidden');
+                iconChevronRight.classList.remove('hidden');
+                sidebarFooter.classList.add('collapsed-footer');
+                logoutBtn.classList.remove('gap-2');
+                logoutBtn.classList.add('px-2');
+                // Text hiding is handled by CSS now
+            } else {
+                sidebar.classList.remove('collapsed');
+                logoContainer.classList.remove('hidden');
+                logoContainerCollapsed.classList.add('hidden');
+                iconChevronLeft.classList.remove('hidden');
+                iconChevronRight.classList.add('hidden');
+                sidebarFooter.classList.remove('collapsed-footer');
+                logoutBtn.classList.add('gap-2');
+                logoutBtn.classList.remove('px-2');
+                // Text showing is handled by CSS now
+            }
+            localStorage.setItem('sidebarCollapsed', isCollapsed);
+        }
+
+        // Initialize from localStorage
+        const savedCollapsed = localStorage.getItem('sidebarCollapsed') === 'true';
+        setCollapsed(savedCollapsed);
+
+        sidebarToggle.addEventListener('click', () => {
+            const isCollapsed = sidebar.classList.contains('collapsed');
+            setCollapsed(!isCollapsed);
+        });
+
+        // --- 2. Mobile Menu Management ---
+        function toggleMobile() {
+            sidebar.classList.toggle('mobile-open');
+            overlay.classList.toggle('active');
+        }
+
+        mobileToggle.addEventListener('click', toggleMobile);
+        overlay.addEventListener('click', toggleMobile);
+
+        // --- 3. Role-Based Visibility & Usage Stats ---
+        function safeDecodeBase64Url(base64Url) {
+            try {
+                if (typeof decodeBase64Url === 'function') return decodeBase64Url(base64Url);
+                let base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+                while (base64.length % 4) base64 += '=';
+                return atob(base64);
+            } catch (e) { return null; }
+        }
+
+        const token = localStorage.getItem('access_token');
+        let userRole = 'org_user';
+
+        if (token) {
+            try {
+                const payload = token.split('.')[1];
+                const decoded = JSON.parse(safeDecodeBase64Url(payload));
+                userRole = decoded.role || 'org_user';
+
+                // Show Admin Panel
+                if (userRole === 'org_admin' || userRole === 'super_admin') {
+                    document.getElementById('nav-admin').classList.remove('hidden');
+                }
+                // Show Client View
+                if (userRole === 'client') {
+                    document.getElementById('nav-client').classList.remove('hidden');
+                }
+
+                // Fetch and Render Usage Stats
+                fetchUsageStats(userRole);
+
+            } catch (e) {
+                console.error('Error decoding token for sidebar:', e);
+            }
+        }
+
+        async function fetchUsageStats(role) {
+            try {
+                // Use makeAuthenticatedRequest if available, otherwise fetch
+                let response;
+                if (typeof makeAuthenticatedRequest === 'function') {
+                    response = await makeAuthenticatedRequest('/api/org/usage', { method: 'GET' });
+                } else {
+                    response = await fetch('/api/org/usage', {
+                        method: 'GET',
+                        headers: {
+                            'Authorization': 'Bearer ' + token,
+                            'Content-Type': 'application/json'
+                        }
+                    });
+                }
+
+                const data = await response.json();
+                if (data.status === 'success') {
+                    renderUsageStats(data, role);
+                }
+            } catch (e) {
+                console.error('Failed to load usage stats:', e);
+            }
+        }
+
+        function renderUsageStats(usageData, role) {
+            const limits = usageData.limits || {};
+            const u = usageData.usage || {};
+            const pct = usageData.percentage || {};
+
+            const renderProgress = (label, value, limit, percent) => {
+                const pctVal = Math.max(0, Math.min(100, percent || (limit > 0 && limit < 999999 ? Math.round((value / limit) * 100) : 0)));
+                const limitText = limit >= 999999 ? `${value} / ∞` : `${value} / ${limit} (${pctVal}%)`;
+                return `
+                    <div class="mb-3">
+                        <div class="flex justify-between text-xs mb-1">
+                            <span>${label}</span>
+                            <span>${limitText}</span>
+                        </div>
+                        <div class="w-full h-2 bg-slate-700 rounded">
+                            <div class="h-2 bg-sky-500 rounded" style="width: ${pctVal}%"></div>
+                        </div>
+                    </div>
+                `;
+            };
+
+            let html = `
+                <div class="mt-6 p-3 bg-slate-900/50 rounded-lg border border-slate-700 text-slate-200">
+                    <div class="text-xs font-bold mb-2">Organization Usage</div>
+                    ${renderProgress('Projects', u.projects || 0, limits.projects ?? 0, pct.projects)}
+                    ${renderProgress('Team Members', u.users || 0, limits.users ?? 0, pct.users)}
+                    ${renderProgress('AI Prompts (This Week)', u.ai_prompts_this_week || 0, limits.ai_prompts_per_week ?? 0, pct.ai_prompts)}
+                    <div class="mt-2 text-[10px] text-slate-400">${usageData.subscription?.plan ? `Plan: ${usageData.subscription.plan}` : ''}</div>
+            `;
+
+            if (role === 'super_admin' || role === 'org_admin') {
+                html += `
+                    <button onclick="if(window.openSubscriptionManagement) window.openSubscriptionManagement()" class="w-full mt-3 py-2 px-3 text-xs font-medium text-purple-300 bg-purple-900/30 rounded hover:bg-purple-900/40 transition-colors">
+                        Manage Subscription →
+                    </button>
+                `;
+            }
+
+            html += `</div>`;
+            usageStatsContainer.innerHTML = html;
+        }
+
+        // --- 4. Logout Logic ---
+        logoutBtn.addEventListener('click', () => {
+            if (token) {
+                fetch('/api/logout', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': 'Bearer ' + token
+                    }
+                }).catch(err => console.error('Logout API error:', err));
+            }
+            localStorage.removeItem('access_token');
+            localStorage.removeItem('refresh_token');
+            localStorage.removeItem('user_data');
+            localStorage.removeItem('aiProjectControlTowerAuth_v2');
+            window.location.href = '/';
+        });
+    })();
+</script>

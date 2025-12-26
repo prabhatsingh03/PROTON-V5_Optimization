@@ -1,0 +1,463 @@
+<script type="text/babel">
+    const AIInsightsTab = ({ tasks, dashboardData, selectedProject, onAIUpdate, loggedInUserType }) => {
+        const { useState, useEffect, useMemo, useRef } = React;
+        const [isGeneratingInsights, setIsGeneratingInsights] = useState(false);
+        const [projectInsights, setProjectInsights] = useState(null);
+        const [selectedTask, setSelectedTask] = useState(null);
+        const [retryStatus, setRetryStatus] = useState(null);
+        const delayChartCanvasRef = useRef(null);
+        const trendChartCanvasRef = useRef(null);
+        const delayChartInstanceRef = useRef(null);
+        const trendChartInstanceRef = useRef(null);
+        
+        // Calculate risk score from tasks
+        const riskScore = useMemo(() => {
+            if (!tasks || tasks.length === 0) return 0;
+            const flattenTasks = (taskList) => {
+                let flat = [];
+                taskList.forEach(task => {
+                    flat.push(task);
+                    if (task.subtasks && task.subtasks.length > 0) {
+                        flat = flat.concat(flattenTasks(task.subtasks));
+                    }
+                });
+                return flat;
+            };
+            const allTasks = flattenTasks(tasks);
+            const totalTasks = allTasks.length;
+            if (totalTasks === 0) return 0;
+            
+            const delayedTasks = allTasks.filter(t => 
+                t.status === 'Delayed' || 
+                (t.delayWeatherDays || 0) > 0 || 
+                (t.delayContractorDays || 0) > 0 || 
+                (t.delayClientDays || 0) > 0
+            ).length;
+            const criticalTasks = allTasks.filter(t => t.isCritical).length;
+            const lowProgressTasks = allTasks.filter(t => (t.progress || 0) < 50 && t.status !== 'Completed').length;
+            
+            // Risk score calculation (0-100)
+            const delayWeight = (delayedTasks / totalTasks) * 40;
+            const criticalWeight = (criticalTasks / totalTasks) * 30;
+            const progressWeight = (lowProgressTasks / totalTasks) * 30;
+            
+            return Math.min(100, Math.round(delayWeight + criticalWeight + progressWeight));
+        }, [tasks]);
+        
+        // Load cached insights from backend for this project
+        const loadCachedInsights = async () => {
+            if (!selectedProject) return;
+            try {
+                const response = await makeAuthenticatedRequest(`/api/projects/${encodeURIComponent(selectedProject)}/ai-insights`, {
+                    method: 'GET',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                if (!response.ok) {
+                    console.error('Failed to load cached AI insights:', response.status);
+                    return;
+                }
+                const data = await response.json();
+                if (data.status === 'success' && data.insights) {
+                    setProjectInsights(data.insights);
+                } else {
+                    setProjectInsights(null);
+                }
+            } catch (err) {
+                console.error('Error loading cached AI insights:', err);
+            }
+        };
+        
+        // Generate project-level insights and persist them
+        const generateProjectInsights = async () => {
+            setIsGeneratingInsights(true);
+            setRetryStatus(null);
+            
+            const allTasksSummary = tasks ? tasks.map(t => JSON.stringify({ 
+                wbs: t.wbs, 
+                name: t.taskName, 
+                status: t.status, 
+                progress: t.progress || 0,
+                plannedStart: t.plannedStartDate,
+                plannedEnd: t.plannedEndDate,
+                delays: {
+                    weather: t.delayWeatherDays || 0,
+                    contractor: t.delayContractorDays || 0,
+                    client: t.delayClientDays || 0
+                },
+                isCritical: t.isCritical || false,
+                predecessors: t.predecessorString || 'None'
+            })).join('\n') : '';
+            
+            const prompt = `
+            Analyze this project schedule and provide:
+            1. Overall risk score (0-100)
+            2. Top 5 recommendations for improvement
+            3. Delay predictions for next 30 days
+            4. Critical path analysis
+            5. Resource allocation suggestions
+            
+            Project data:
+            ${allTasksSummary}
+            
+            Return your response as a valid JSON object with the following structure:
+            {
+                "riskScore": <number 0-100>,
+                "riskLevel": "<Low|Medium|High>",
+                "recommendations": [
+                    {"title": "<title>", "description": "<description>", "priority": "<High|Medium|Low>"}
+                ],
+                "delayForecast": {
+                    "weather": <predicted days>,
+                    "contractor": <predicted days>,
+                    "client": <predicted days>
+                },
+                "criticalPathInsights": "<text description>",
+                "resourceSuggestions": "<text description>",
+                "trendAnalysis": "<text description>"
+            }
+            `;
+            
+            try {
+                let chatHistory = [{ role: "user", parts: [{ text: prompt }] }];
+                
+                const result = await retryApiCall(async () => {
+                    const response = await makeAuthenticatedRequest('/api/gemini/generate-content', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ contents: chatHistory, use_chatbot_key: false })
+                    });
+                    if (!response.ok) { 
+                        throw new Error(`API request failed with status ${response.status}`); 
+                    }
+                    return await response.json();
+                }, 3, 1000, (attempt, maxRetries) => {
+                    setRetryStatus(`Retrying... (${attempt}/${maxRetries})`);
+                });
+                
+                let responseText = result.candidates[0].content.parts[0].text;
+                responseText = responseText.trim().replace(/^```json\s*/, '').replace(/```$/, '');
+                
+                try {
+                    const parsedData = JSON.parse(responseText);
+                    setProjectInsights(parsedData);
+                    
+                    // Persist insights to backend for this project
+                    if (selectedProject) {
+                        try {
+                            await makeAuthenticatedRequest(`/api/projects/${encodeURIComponent(selectedProject)}/ai-insights`, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ insights: parsedData })
+                            });
+                        } catch (saveErr) {
+                            console.error('Failed to save AI insights:', saveErr);
+                        }
+                    }
+                } catch (parseError) {
+                    console.error("JSON Parsing Error:", parseError);
+                    setProjectInsights({
+                        riskScore: riskScore,
+                        riskLevel: riskScore < 30 ? 'Low' : riskScore < 60 ? 'Medium' : 'High',
+                        recommendations: [],
+                        delayForecast: { weather: 0, contractor: 0, client: 0 },
+                        criticalPathInsights: "Unable to generate AI insights. Please try again.",
+                        resourceSuggestions: "",
+                        trendAnalysis: ""
+                    });
+                }
+            } catch (error) {
+                console.error("Error calling Gemini API:", error);
+                setRetryStatus(null);
+            } finally {
+                setIsGeneratingInsights(false);
+            }
+        };
+        
+        // Load cached insights on mount / project change instead of always regenerating
+        useEffect(() => {
+            if (selectedProject) {
+                loadCachedInsights();
+            } else {
+                setProjectInsights(null);
+            }
+        }, [selectedProject]);
+        
+        const riskLevel = riskScore < 30 ? 'Low' : riskScore < 60 ? 'Medium' : 'High';
+        const riskColor = riskScore < 30 ? 'green' : riskScore < 60 ? 'yellow' : 'red';
+        
+        // Render Delay Forecast & Historical Trends charts using Chart.js
+        useEffect(() => {
+            if (!window.Chart) return;
+
+            // Clean up old charts if any
+            if (delayChartInstanceRef.current) {
+                delayChartInstanceRef.current.destroy();
+                delayChartInstanceRef.current = null;
+            }
+            if (trendChartInstanceRef.current) {
+                trendChartInstanceRef.current.destroy();
+                trendChartInstanceRef.current = null;
+            }
+
+            if (!projectInsights) return;
+
+            const delayCanvas = delayChartCanvasRef.current;
+            const trendCanvas = trendChartCanvasRef.current;
+            
+            // Delay Forecast chart (predicted delay days by type)
+            if (delayCanvas && projectInsights.delayForecast) {
+                const ctx = delayCanvas.getContext('2d');
+                const df = projectInsights.delayForecast || {};
+                const labels = ['Weather', 'Contractor', 'Client'];
+                const values = [
+                    Number(df.weather || 0),
+                    Number(df.contractor || 0),
+                    Number(df.client || 0)
+                ];
+                const gradient = ctx.createLinearGradient(0, 0, 0, 400);
+                gradient.addColorStop(0, '#ec4899');
+                gradient.addColorStop(1, '#6366f1');
+
+                const chart = new Chart(ctx, {
+                    type: 'bar',
+                    data: {
+                        labels,
+                        datasets: [
+                            {
+                                label: 'Predicted Delay (days)',
+                                data: values,
+                                backgroundColor: gradient,
+                                borderColor: '#4c1d95',
+                                borderWidth: 2,
+                                borderRadius: 8,
+                                borderSkipped: false
+                            }
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        scales: {
+                            y: {
+                                beginAtZero: true,
+                                title: {
+                                    display: true,
+                                    text: 'Days',
+                                }
+                            }
+                        },
+                        plugins: {
+                            legend: { display: false },
+                            title: {
+                                display: true,
+                                text: 'Predicted Delay by Cause'
+                            }
+                        }
+                    }
+                });
+                delayChartInstanceRef.current = chart;
+            }
+
+            // Historical Trends chart – risk breakdown from current project data
+            if (trendCanvas && tasks && tasks.length > 0) {
+                const ctx = trendCanvas.getContext('2d');
+
+                // Derive simple trend-style breakdown from task data
+                const flatten = (list) => {
+                    let out = [];
+                    list.forEach(t => {
+                        out.push(t);
+                        if (t.subtasks && t.subtasks.length > 0) {
+                            out = out.concat(flatten(t.subtasks));
+                        }
+                    });
+                    return out;
+                };
+                const allTasks = flatten(tasks);
+                const total = allTasks.length || 1;
+                const delayedCount = allTasks.filter(t =>
+                    t.status === 'Delayed' ||
+                    (t.delayWeatherDays || 0) > 0 ||
+                    (t.delayContractorDays || 0) > 0 ||
+                    (t.delayClientDays || 0) > 0
+                ).length;
+                const criticalCount = allTasks.filter(t => t.isCritical).length;
+                const lowProgressCount = allTasks.filter(t => (t.progress || 0) < 50 && t.status !== 'Completed').length;
+
+                const labels = ['Delayed Tasks', 'Critical Tasks', 'Low Progress Tasks'];
+                const values = [
+                    Math.round((delayedCount / total) * 100),
+                    Math.round((criticalCount / total) * 100),
+                    Math.round((lowProgressCount / total) * 100)
+                ];
+
+                const chart = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels,
+                        datasets: [
+                            {
+                                label: 'Share of Tasks (%)',
+                                data: values,
+                                borderColor: '#6366f1',
+                                backgroundColor: 'rgba(129, 140, 248, 0.25)',
+                                fill: true,
+                                tension: 0.4,
+                                borderWidth: 3,
+                                pointRadius: 5,
+                                pointBackgroundColor: '#4f46e5',
+                                pointBorderColor: '#ffffff',
+                                pointBorderWidth: 2
+                            }
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        scales: {
+                            y: {
+                                beginAtZero: true,
+                                max: 100,
+                                title: {
+                                    display: true,
+                                    text: 'Percentage of Tasks'
+                                }
+                            }
+                        },
+                        plugins: {
+                            legend: { display: false },
+                            title: {
+                                display: true,
+                                text: 'Current Risk Drivers (as % of tasks)'
+                            }
+                        }
+                    }
+                });
+                trendChartInstanceRef.current = chart;
+            }
+
+            // Cleanup on unmount
+            return () => {
+                if (delayChartInstanceRef.current) {
+                    delayChartInstanceRef.current.destroy();
+                    delayChartInstanceRef.current = null;
+                }
+                if (trendChartInstanceRef.current) {
+                    trendChartInstanceRef.current.destroy();
+                    trendChartInstanceRef.current = null;
+                }
+            };
+        }, [projectInsights, tasks]);
+        
+        return React.createElement("div", { className: "ai-insights-tab-container space-y-6" },
+            // Gradient Header
+            React.createElement("div", { className: "bg-gradient-to-r from-pink-500 to-violet-600 text-white p-6 rounded-xl shadow-lg" },
+                React.createElement("div", { className: "flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4" },
+                    React.createElement("div", null,
+                        React.createElement("h2", { className: "text-2xl font-bold mb-2" }, "AI-Powered Project Insights"),
+                        React.createElement("p", { className: "text-pink-100 text-sm" },
+                            projectInsights ? `Last updated: ${new Date().toLocaleString()}` : "Generating insights..."
+                        )
+                    ),
+                    React.createElement("button", {
+                        onClick: generateProjectInsights,
+                        disabled: isGeneratingInsights,
+                        className: `px-4 py-2 bg-white/20 hover:bg-white/30 rounded-lg text-sm font-semibold transition-colors ${isGeneratingInsights ? 'opacity-50 cursor-not-allowed' : ''}`
+                    }, isGeneratingInsights ? "Generating..." : "Refresh Insights")
+                )
+            ),
+            
+            // AI Risk Score Meter
+            React.createElement("div", { className: "bg-white rounded-xl shadow-md overflow-hidden" },
+                React.createElement("div", { className: "bg-gradient-to-r from-pink-500 to-violet-600 text-white p-4 font-semibold" }, "Project Risk Score"),
+                React.createElement("div", { className: "p-6 flex flex-col items-center" },
+                    React.createElement("div", {
+                        className: "ai-risk-meter relative w-48 h-48 flex items-center justify-center",
+                        style: {
+                            background: `conic-gradient(from 0deg, ${riskColor === 'green' ? '#10b981' : riskColor === 'yellow' ? '#f59e0b' : '#ef4444'} 0%, ${riskColor === 'green' ? '#10b981' : riskColor === 'yellow' ? '#f59e0b' : '#ef4444'} ${riskScore * 3.6}deg, #e5e7eb ${riskScore * 3.6}deg)`,
+                            borderRadius: '50%'
+                        }
+                    },
+                        React.createElement("div", { className: "absolute inset-4 bg-white rounded-full flex flex-col items-center justify-center" },
+                            React.createElement("div", { className: "text-4xl font-bold", style: { color: riskColor === 'green' ? '#10b981' : riskColor === 'yellow' ? '#f59e0b' : '#ef4444' } }, riskScore),
+                            React.createElement("div", { className: "text-sm text-gray-500" }, riskLevel)
+                        )
+                    ),
+                    React.createElement("p", { className: "mt-4 text-gray-600 text-center" },
+                        projectInsights && projectInsights.criticalPathInsights ? projectInsights.criticalPathInsights : "Analyzing project risks..."
+                    )
+                )
+            ),
+            
+            // AI Recommendations
+            React.createElement("div", { className: "bg-white rounded-xl shadow-md overflow-hidden" },
+                React.createElement("div", { className: "bg-gradient-to-r from-pink-500 to-violet-600 text-white p-4 font-semibold" }, "AI Recommendations"),
+                React.createElement("div", { className: "p-6" },
+                    isGeneratingInsights ? (
+                        React.createElement("div", { className: "text-center py-8" },
+                            React.createElement("div", { className: "ai-spinner inline-block" }),
+                            React.createElement("p", { className: "mt-4 text-gray-600" }, retryStatus || "Generating recommendations...")
+                        )
+                    ) : projectInsights && projectInsights.recommendations && projectInsights.recommendations.length > 0 ? (
+                        React.createElement("div", { className: "grid grid-cols-1 md:grid-cols-2 gap-4" },
+                            projectInsights.recommendations.map((rec, idx) => (
+                                React.createElement("div", {
+                                    key: idx,
+                                    className: "ai-recommendation-card bg-gradient-to-br from-pink-50 to-violet-50 p-4 rounded-lg border border-pink-200 hover:shadow-lg transition-shadow"
+                                },
+                                    React.createElement("div", { className: "flex items-start justify-between mb-2" },
+                                        React.createElement("h3", { className: "font-bold text-gray-800" }, rec.title || `Recommendation ${idx + 1}`),
+                                        React.createElement("span", {
+                                            className: `px-2 py-1 text-xs rounded-full font-semibold ${
+                                                rec.priority === 'High' ? 'bg-red-100 text-red-700' :
+                                                rec.priority === 'Medium' ? 'bg-yellow-100 text-yellow-700' :
+                                                'bg-green-100 text-green-700'
+                                            }`
+                                        }, rec.priority || 'Medium')
+                                    ),
+                                    React.createElement("p", { className: "text-sm text-gray-600" }, rec.description || '')
+                                )
+                            ))
+                        )
+                    ) : (
+                        React.createElement("div", { className: "text-center py-8 text-gray-400" },
+                            React.createElement("p", null, "No recommendations available")
+                        )
+                    )
+                )
+            ),
+            
+            // Delay Prediction Charts
+            React.createElement("div", { className: "bg-white rounded-xl shadow-md overflow-hidden" },
+                React.createElement("div", { className: "bg-gradient-to-r from-pink-500 to-violet-600 text-white p-4 font-semibold" }, "Delay Forecast"),
+                React.createElement("div", { className: "p-6" },
+                    React.createElement("div", { className: "w-full h-64" },
+                        React.createElement("canvas", {
+                            id: "ai-delay-forecast-chart",
+                            className: "w-full h-full",
+                            ref: delayChartCanvasRef
+                        })
+                    )
+                )
+            ),
+            
+            // Trend Analytics
+            React.createElement("div", { className: "bg-white rounded-xl shadow-md overflow-hidden" },
+                React.createElement("div", { className: "bg-gradient-to-r from-pink-500 to-violet-600 text-white p-4 font-semibold" }, "Historical Trends"),
+                React.createElement("div", { className: "p-6 space-y-4" },
+                    React.createElement("div", { className: "w-full h-64" },
+                        React.createElement("canvas", {
+                            id: "ai-trend-chart",
+                            className: "w-full h-full",
+                            ref: trendChartCanvasRef
+                        })
+                    ),
+                    projectInsights && projectInsights.trendAnalysis && (
+                        React.createElement("p", { className: "text-sm text-gray-600" }, projectInsights.trendAnalysis)
+                    )
+                )
+            )
+        );
+    };
+</script>
+

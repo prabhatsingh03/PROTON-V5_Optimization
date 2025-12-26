@@ -1,0 +1,2961 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PROTON - Simon India Limited</title>
+    <link rel="icon" href="static/favicon.ico" type="image/x-icon">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Razorpay Checkout Script -->
+    <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="static/js/background_animation.js" defer></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            overflow-x: hidden;
+        }
+
+        #canvas-container {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: -1;
+            pointer-events: none;
+            /* Add a subtle gradient overlay to blend 3D with content */
+            background: radial-gradient(circle at center, transparent 0%, rgba(15, 23, 42, 0.8) 100%);
+        }
+
+        /* Enhanced Glassmorphism */
+        .glass-card {
+            background: rgba(255, 255, 255, 0.03);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            box-shadow: 0 4px 30px rgba(0, 0, 0, 0.1);
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .glass-card:hover {
+            background: rgba(255, 255, 255, 0.06);
+            border-color: rgba(56, 189, 248, 0.3);
+            transform: translateY(-4px);
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.2);
+        }
+
+        /* Typography & Utilities */
+        .text-glow {
+            text-shadow: 0 0 20px rgba(56, 189, 248, 0.5);
+        }
+
+        .gradient-text {
+            background: linear-gradient(135deg, #38bdf8 0%, #818cf8 50%, #c084fc 100%);
+            -webkit-background-clip: text;
+            background-clip: text;
+            color: transparent;
+        }
+
+        /* Scroll Animations */
+        .fade-up {
+            opacity: 0;
+            transform: translateY(30px);
+            transition: opacity 0.8s ease-out, transform 0.8s ease-out;
+        }
+
+        .fade-up.visible {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        .delay-100 {
+            transition-delay: 0.1s;
+        }
+
+        .delay-200 {
+            transition-delay: 0.2s;
+        }
+
+        .delay-300 {
+            transition-delay: 0.3s;
+        }
+
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: #0f172a;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #334155;
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: #475569;
+        }
+
+        /* Existing Styles Refined */
+        .glow-on-hover:hover {
+            box-shadow: 0 0 30px rgba(56, 189, 248, 0.4);
+        }
+
+        @keyframes float {
+
+            0%,
+            100% {
+                transform: translateY(0px);
+            }
+
+            50% {
+                transform: translateY(-10px);
+            }
+        }
+
+        .animate-float {
+            animation: float 4s ease-in-out infinite;
+        }
+
+        /* Plan Cards */
+        .plan-card {
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+
+        .plan-card.selected {
+            border-color: #38bdf8;
+            border-width: 1px;
+            box-shadow: 0 0 30px rgba(56, 189, 248, 0.2);
+        }
+
+        .plan-card.recommended {
+            border-color: #8b5cf6;
+            background: linear-gradient(135deg, rgba(139, 92, 246, 0.05), rgba(59, 130, 246, 0.05));
+        }
+
+        /* Feature List */
+        .pricing-feature {
+            position: relative;
+            padding-left: 1.75rem;
+            display: block;
+            margin-bottom: 0.75rem;
+        }
+
+        .pricing-feature::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: 0.35rem;
+            width: 1rem;
+            height: 1rem;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' stroke='%2338bdf8' viewBox='0 0 24 24'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M5 13l4 4L19 7'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-size: contain;
+        }
+
+        /* Misc */
+        .password-strength-bar {
+            height: 4px;
+            border-radius: 2px;
+            transition: all 0.3s ease;
+        }
+
+        .strength-weak {
+            width: 33%;
+            background-color: #ef4444;
+        }
+
+        .strength-medium {
+            width: 66%;
+            background-color: #f59e0b;
+        }
+
+        .strength-strong {
+            width: 100%;
+            background-color: #10b981;
+        }
+
+        .validation-error {
+            color: #ef4444;
+            font-size: 0.875rem;
+            margin-top: 0.25rem;
+        }
+
+        .validation-success {
+            color: #10b981;
+            font-size: 0.875rem;
+            margin-top: 0.25rem;
+        }
+
+        .spinner {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            border-top-color: white;
+            border-radius: 50%;
+            animation: spin 0.6s linear infinite;
+        }
+
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        /* Modal Tweaks */
+        #paymentOptionModal .plan-details {
+            background: linear-gradient(135deg, rgba(139, 92, 246, 0.1), rgba(59, 130, 246, 0.1));
+        }
+
+        #paymentSuccessModal .success-icon {
+            animation: successPulse 0.6s ease-out;
+        }
+
+        @keyframes successPulse {
+            0% {
+                transform: scale(0);
+                opacity: 0;
+            }
+
+            50% {
+                transform: scale(1.1);
+            }
+
+            100% {
+                transform: scale(1);
+                opacity: 1;
+            }
+        }
+
+        #superadminSignupModal .warning-banner {
+            background: linear-gradient(135deg, rgba(239, 68, 68, 0.1), rgba(251, 146, 60, 0.1));
+            border-left: 4px solid #ef4444;
+        }
+
+        #superadminSignupModal .submit-button {
+            background: linear-gradient(135deg, #7c3aed, #dc2626);
+        }
+
+        #superadminSignupModal .submit-button:hover {
+            background: linear-gradient(135deg, #6d28d9, #b91c1c);
+        }
+
+        .razorpay-container {
+            z-index: 9999 !important;
+        }
+
+        #adminFields,
+        #clientFields {
+            transition: opacity 0.3s ease, visibility 0.3s ease;
+        }
+
+        #adminFields.hidden,
+        #clientFields.hidden {
+            opacity: 0;
+            visibility: hidden;
+            pointer-events: none;
+        }
+
+        #adminFields:not(.hidden),
+        #clientFields:not(.hidden) {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        @media (max-width: 640px) {
+
+            #paymentOptionModal .modal-content,
+            #paymentSuccessModal .modal-content {
+                max-width: 95%;
+                padding: 1.5rem;
+            }
+
+            #paymentOptionModal button,
+            #paymentSuccessModal button {
+                font-size: 0.875rem;
+                padding: 0.75rem 1rem;
+            }
+        }
+    </style>
+</head>
+
+<body class="bg-gradient-to-br from-slate-900 via-blue-900 to-slate-800 min-h-screen flex flex-col">
+    <div id="canvas-container"></div>
+    <nav class="fixed top-0 left-0 right-0 z-50 bg-black/20 backdrop-blur-md border-b border-white/10">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between items-center h-24">
+                <div class="flex items-center flex-shrink-0">
+                    <img src="static/logo.png" alt="PROTON Logo" class="h-16 rounded-md w-auto animate-float">
+                </div>
+                <!-- Desktop Menu -->
+                <div class="hidden md:flex items-center space-x-8">
+                    <a href="#about" class="text-slate-300 hover:text-white transition-colors">About</a>
+                    <a href="#pricing" class="text-slate-300 hover:text-white transition-colors">Pricing</a>
+                    <a href="#features" class="text-slate-300 hover:text-white transition-colors">Features</a>
+                    <button onclick="showLoginModal()"
+                        class="bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-600 hover:to-blue-700 text-white font-semibold px-6 py-2 rounded-lg transition-all duration-300">
+                        Login
+                    </button>
+                </div>
+                <!-- Mobile Menu Button -->
+                <div class="md:hidden flex items-center space-x-4">
+                    <button onclick="showLoginModal()"
+                        class="bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-600 hover:to-blue-700 text-white font-semibold px-4 py-2 rounded-lg transition-all duration-300 text-sm">
+                        Login
+                    </button>
+                    <button id="mobile-menu-button" class="text-slate-300 hover:text-white focus:outline-none">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                            xmlns="http://www.w3.org/2000/svg">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M4 6h16M4 12h16m-7 6h7"></path>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        </div>
+        <!-- Mobile Menu -->
+        <div id="mobile-menu" class="md:hidden hidden bg-black/30 backdrop-blur-md">
+            <div class="px-2 pt-2 pb-3 space-y-1 sm:px-3">
+                <a href="#about"
+                    class="text-slate-300 hover:text-white block px-3 py-2 rounded-md text-base font-medium">About</a>
+                <a href="#pricing"
+                    class="text-slate-300 hover:text-white block px-3 py-2 rounded-md text-base font-medium">Pricing</a>
+                <a href="#features"
+                    class="text-slate-300 hover:text-white block px-3 py-2 rounded-md text-base font-medium">Features</a>
+            </div>
+        </div>
+    </nav>
+
+    <section class="min-h-screen flex items-center justify-center relative overflow-hidden pt-20">
+        <!-- Background Grid Overlay -->
+        <div class="absolute inset-0 bg-[url('data:image/svg+xml,%3Csvg xmlns=\" http://www.w3.org/2000/svg\"
+            viewBox=\"0 0 100 100\"%3E%3Cdefs%3E%3Cpattern id=\"grid\" width=\"10\" height=\"10\"
+            patternUnits=\"userSpaceOnUse\"%3E%3Cpath d=\"M 10 0 L 0 0 0 10\" fill=\"none\" stroke=\"%23334155\"
+            stroke-width=\"0.5\" opacity=\"0.1\"/%3E%3C/pattern%3E%3C/defs%3E%3Crect width=\"100\" height=\"100\"
+            fill=\"url(%23grid)\"/%3E%3C/svg%3E')] opacity-20 pointer-events-none"></div>
+
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative z-10 w-full">
+            <div class="text-center max-w-5xl mx-auto">
+                <!-- Badge -->
+                <div
+                    class="inline-block mb-8 px-4 py-1.5 rounded-full border border-sky-500/30 bg-sky-500/10 backdrop-blur-md fade-up">
+                    <span class="text-sky-300 text-sm font-medium tracking-wide uppercase">Developed by Simon India
+                        Limited</span>
+                </div>
+
+                <!-- Main Title -->
+                <h1
+                    class="font-bold text-white mb-6 fade-up delay-100 flex flex-col sm:block items-center justify-center">
+                    <span
+                        class="text-6xl sm:text-8xl lg:text-9xl tracking-tighter text-transparent bg-clip-text bg-gradient-to-r from-sky-400 via-blue-500 to-cyan-400 filter drop-shadow-[0_0_30px_rgba(56,189,248,0.3)]">PROTON</span>
+                    <span class="text-4xl sm:text-6xl lg:text-7xl text-white/80 font-light ml-2">SI</span>
+                </h1>
+
+                <!-- Subtitle / Full Name -->
+                <h2
+                    class="text-xl sm:text-2xl md:text-3xl text-sky-100 font-medium mb-8 fade-up delay-200 tracking-wide leading-tight">
+                    Project Response & Operations Tracker <span class="text-sky-400">via Optimized Network</span>
+                </h2>
+
+                <!-- Description -->
+                <p
+                    class="text-lg sm:text-xl text-slate-300 mb-12 max-w-3xl mx-auto leading-relaxed fade-up delay-300 font-light">
+                    <span class="text-white font-medium">AI-enabled Project Control Tower</span> — A cutting-edge
+                    platform that transforms how you track, analyze, and optimize your operations with real-time
+                    insights and AI-powered recommendations.
+                </p>
+
+                <!-- Buttons -->
+                <div class="flex flex-col sm:flex-row justify-center gap-6 mb-20 fade-up delay-300">
+                    <button onclick="showLoginModal()"
+                        class="group relative px-8 py-4 bg-sky-600 hover:bg-sky-500 text-white font-semibold rounded-xl transition-all duration-300 shadow-[0_0_20px_rgba(56,189,248,0.3)] hover:shadow-[0_0_30px_rgba(56,189,248,0.5)] hover:-translate-y-1 overflow-hidden">
+                        <span class="relative z-10 flex items-center justify-center">
+                            Access Dashboard
+                            <svg class="w-5 h-5 ml-2 -mr-1 transition-transform group-hover:translate-x-1" fill="none"
+                                stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d="M13 7l5 5m0 0l-5 5m5-5H6"></path>
+                            </svg>
+                        </span>
+                        <div
+                            class="absolute inset-0 bg-gradient-to-r from-sky-400 to-blue-500 opacity-0 group-hover:opacity-100 transition-opacity duration-300">
+                        </div>
+                    </button>
+                    <button onclick="showSignupModal()"
+                        class="px-8 py-4 bg-white/5 hover:bg-white/10 border border-white/10 hover:border-white/20 text-white font-semibold rounded-xl transition-all duration-300 backdrop-blur-md hover:-translate-y-1">
+                        Start Free Trial
+                    </button>
+                </div>
+
+                <!-- Stats / Trust Indicators -->
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-8 border-t border-white/10 pt-12 fade-up delay-300">
+                    <div class="group">
+                        <div class="text-3xl font-bold text-white mb-1 group-hover:text-sky-400 transition-colors">100+
+                        </div>
+                        <div class="text-sm text-slate-400">Years Legacy</div>
+                    </div>
+                    <div class="group">
+                        <div class="text-3xl font-bold text-white mb-1 group-hover:text-sky-400 transition-colors">50+
+                        </div>
+                        <div class="text-sm text-slate-400">Global Projects</div>
+                    </div>
+                    <div class="group">
+                        <div class="text-3xl font-bold text-white mb-1 group-hover:text-sky-400 transition-colors">24/7
+                        </div>
+                        <div class="text-sm text-slate-400">AI Support</div>
+                    </div>
+                    <div class="group">
+                        <div class="text-3xl font-bold text-white mb-1 group-hover:text-sky-400 transition-colors">99.9%
+                        </div>
+                        <div class="text-sm text-slate-400">Uptime</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Scroll Indicator -->
+        <div
+            class="absolute bottom-10 left-1/2 transform -translate-x-1/2 animate-bounce text-slate-400 fade-up delay-300">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3">
+                </path>
+            </svg>
+        </div>
+    </section>
+
+    <section id="projects" class="py-20 bg-black/20">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="text-center mb-16">
+                <h2 class="text-3xl sm:text-4xl font-bold text-white mb-4">Our Project Portfolio</h2>
+                <p class="text-xl text-slate-300 max-w-3xl mx-auto">
+                    Discover our diverse portfolio of successful projects spanning across international landmarks,
+                    national infrastructure, and commercial developments.
+                </p>
+            </div>
+
+            <div class="mb-16">
+                <h3 class="text-2xl font-bold text-sky-400 mb-8 text-center">International Projects</h3>
+                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+                    <div class="project-card glass-card rounded-xl p-6">
+                        <div
+                            class="h-48 bg-gradient-to-r from-red-500 to-red-600 rounded-lg mb-4 flex items-center justify-center">
+                            <span class="text-white font-semibold text-lg">Caustic Soda Plant, Qatar</span>
+                        </div>
+                        <h4 class="text-xl font-semibold text-white mb-2">Caustic Soda Plant, Qatar</h4>
+                        <p class="text-slate-300">Detailed engineering & project management for a 200 MTPD plant.
+                            Client: KLJ.</p>
+                    </div>
+
+                    <div class="project-card glass-card rounded-xl p-6">
+                        <div
+                            class="h-48 bg-gradient-to-r from-blue-500 to-blue-600 rounded-lg mb-4 flex items-center justify-center">
+                            <span class="text-white font-semibold text-lg">Hypochlorite & HCL Plant, KSA</span>
+                        </div>
+                        <h4 class="text-xl font-semibold text-white mb-2">Hypochlorite & HCL Plant, KSA</h4>
+                        <p class="text-slate-300">Detailed engineering & site supervision for a 40 TPD plant. Client: Al
+                            Ghanem.</p>
+                    </div>
+
+                    <div class="project-card glass-card rounded-xl p-6">
+                        <div
+                            class="h-48 bg-gradient-to-r from-purple-500 to-purple-600 rounded-lg mb-4 flex items-center justify-center">
+                            <span class="text-white font-semibold text-lg text-center">Urea Granulation, KSA</span>
+                        </div>
+                        <h4 class="text-xl font-semibold text-white mb-2">Urea Granulation, KSA</h4>
+                        <p class="text-slate-300">Urea Granulation and Ammonia Abatement & Flare System Project. Client:
+                            SABIC.</p>
+                    </div>
+                </div>
+                <div class="text-center mt-8">
+                    <a href="https://simonindia.com/project-gallery" target="_blank"
+                        class="inline-block bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-600 hover:to-blue-700 text-white font-semibold px-8 py-3 rounded-lg transition-all duration-300 glow-on-hover">
+                        Know more
+                    </a>
+                </div>
+            </div>
+
+            <div>
+                <h3 class="text-2xl font-bold text-sky-400 mb-8 text-center">Marquee Projects</h3>
+                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    <div class="project-card glass-card rounded-xl p-4">
+                        <h4 class="text-lg font-semibold text-white mb-2">LPG Terminal, Mundra</h4>
+                        <p class="text-slate-300 text-sm">EPC for 1.34 MMTPA LPG handling and storage facility in
+                            Gujarat. Client: Adani Ports.</p>
+                    </div>
+
+                    <div class="project-card glass-card rounded-xl p-4">
+                        <h4 class="text-lg font-semibold text-white mb-2">SSP Plant, Mahad</h4>
+                        <p class="text-slate-300 text-sm">EPC for 600 MTPD Single Super Phosphate Plant in Maharashtra.
+                            Client: Zuari Agrochemicals.</p>
+                    </div>
+
+                    <div class="project-card glass-card rounded-xl p-4">
+                        <h4 class="text-lg font-semibold text-white mb-2">Sulfuric Acid Plant, Paradeep</h4>
+                        <p class="text-slate-300 text-sm">EPC of 2000 MTPD Sulfuric Acid Plant with 23 MW captive power
+                            plant. Client: Paradeep Phosphates.</p>
+                    </div>
+
+                    <div class="project-card glass-card rounded-xl p-4">
+                        <h4 class="text-lg font-semibold text-white mb-2">Caprolactam Facility, Vadodara</h4>
+                        <p class="text-slate-300 text-sm">EPC for 50,000 MTPY Caprolactam Distillation Facility in
+                            Gujarat. Client: GSFC.</p>
+                    </div>
+
+                    <div class="project-card glass-card rounded-xl p-4">
+                        <h4 class="text-lg font-semibold text-white mb-2">Phosphoric Acid Storage, Sikka</h4>
+                        <p class="text-slate-300 text-sm">EPC for Phosphoric Acid Storage System (2 x 10,000 MT) at
+                            Sikka Shore Terminal. Client: GSFC.</p>
+                    </div>
+
+                    <div class="project-card glass-card rounded-xl p-4">
+                        <h4 class="text-lg font-semibold text-white mb-2">Waste Heat Recovery, Odisha</h4>
+                        <p class="text-slate-300 text-sm">Waste Heat Recovery System project in Odisha. Client: OCL.</p>
+                    </div>
+                </div>
+                <div class="text-center mt-8">
+                    <a href="https://simonindia.com/project-gallery" target="_blank"
+                        class="inline-block bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-600 hover:to-blue-700 text-white font-semibold px-8 py-3 rounded-lg transition-all duration-300 glow-on-hover">
+                        Know more
+                    </a>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="features" class="py-20 relative z-10">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="text-center mb-16 fade-up">
+                <h2 class="text-3xl sm:text-4xl font-bold text-white mb-4">PROTON Features</h2>
+                <p class="text-xl text-slate-300 max-w-3xl mx-auto font-light">
+                    Discover the powerful capabilities that make PROTON the ultimate project management solution.
+                </p>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+                <div class="glass-card rounded-xl p-8 transition-all duration-300 fade-up delay-100 group">
+                    <div class="text-sky-400 mb-4 group-hover:scale-110 transition-transform duration-300">
+                        <svg class="w-12 h-12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z">
+                            </path>
+                        </svg>
+                    </div>
+                    <h3 class="text-xl font-semibold text-white mb-3">Real-time Analytics</h3>
+                    <p class="text-slate-300 text-sm leading-relaxed">Monitor project progress with advanced charts,
+                        S-curve analysis, and
+                        comprehensive performance metrics.</p>
+                </div>
+
+                <div class="glass-card rounded-xl p-8 transition-all duration-300 fade-up delay-200 group">
+                    <div class="text-cyan-400 mb-4 group-hover:scale-110 transition-transform duration-300">
+                        <svg class="w-12 h-12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z">
+                            </path>
+                        </svg>
+                    </div>
+                    <h3 class="text-xl font-semibold text-white mb-3">Dynamic Gantt Charts</h3>
+                    <p class="text-slate-300 text-sm leading-relaxed">Visualize project timelines with interactive Gantt
+                        charts, critical path
+                        analysis, and delay tracking.</p>
+                </div>
+
+                <div class="glass-card rounded-xl p-8 transition-all duration-300 fade-up delay-300 group">
+                    <div class="text-purple-400 mb-4 group-hover:scale-110 transition-transform duration-300">
+                        <svg class="w-12 h-12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z">
+                            </path>
+                        </svg>
+                    </div>
+                    <h3 class="text-xl font-semibold text-white mb-3">AI-Powered Insights</h3>
+                    <p class="text-slate-300 text-sm leading-relaxed">Get intelligent recommendations and automated
+                        project analysis powered by
+                        advanced algorithms.</p>
+                </div>
+
+                <div class="glass-card rounded-xl p-8 transition-all duration-300 fade-up delay-100 group">
+                    <div class="text-green-400 mb-4 group-hover:scale-110 transition-transform duration-300">
+                        <svg class="w-12 h-12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z">
+                            </path>
+                        </svg>
+                    </div>
+                    <h3 class="text-xl font-semibold text-white mb-3">Secure Access Control</h3>
+                    <p class="text-slate-300 text-sm leading-relaxed">Role-based access control with separate admin and
+                        client interfaces for
+                        enhanced security.</p>
+                </div>
+
+                <div class="glass-card rounded-xl p-8 transition-all duration-300 fade-up delay-200 group">
+                    <div class="text-yellow-400 mb-4 group-hover:scale-110 transition-transform duration-300">
+                        <svg class="w-12 h-12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z"></path>
+                        </svg>
+                    </div>
+                    <h3 class="text-xl font-semibold text-white mb-3">Mobile Responsive</h3>
+                    <p class="text-slate-300 text-sm leading-relaxed">Access your project dashboard from any device with
+                        our fully responsive
+                        design.</p>
+                </div>
+
+                <div class="glass-card rounded-xl p-8 transition-all duration-300 fade-up delay-300 group">
+                    <div class="text-red-400 mb-4 group-hover:scale-110 transition-transform duration-300">
+                        <svg class="w-12 h-12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3V10">
+                            </path>
+                        </svg>
+                    </div>
+                    <h3 class="text-xl font-semibold text-white mb-3">Data Export & Reports</h3>
+                    <p class="text-slate-300 text-sm leading-relaxed">Export project data and generate comprehensive
+                        reports in multiple
+                        formats.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="pricing" class="py-20 relative z-10" role="region" aria-labelledby="pricing-heading">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="text-center mb-16 fade-up">
+                <h2 id="pricing-heading" class="text-3xl sm:text-4xl font-bold text-white mb-4">Transparent Pricing</h2>
+                <p class="text-xl text-slate-300 max-w-3xl mx-auto text-center mb-2 font-light">
+                    Choose the perfect plan for your organization. All plans include a 7-day free trial.
+                </p>
+                <p class="text-sm text-slate-400 text-center mb-16">
+                    Need more users? Add ₹500/month per additional admin beyond your plan limit.
+                </p>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                <!-- Basic Plan Card -->
+                <div
+                    class="glass-card rounded-xl p-8 hover:bg-white/10 transition-all duration-300 flex flex-col fade-up delay-100">
+                    <div class="text-xs inline-block px-3 py-1 rounded-full bg-slate-700 text-slate-300 mb-4 w-fit">
+                        STARTER</div>
+                    <h3 class="text-2xl font-bold text-white mb-2">Basic Plan</h3>
+                    <p class="text-sm text-slate-400 mb-4">Perfect for small teams & startups</p>
+
+                    <div class="mb-6">
+                        <div class="text-4xl font-bold text-white mb-1">₹1,700<span
+                                class="text-lg text-slate-400 font-normal">/month</span></div>
+                        <p class="text-xs text-slate-500">Up to 5 admin users included</p>
+                    </div>
+
+                    <div class="mb-8 flex-grow">
+                        <h4 class="text-sm font-semibold text-slate-300 mb-3">Key Features:</h4>
+                        <ul class="space-y-2 text-slate-300 text-sm">
+                            <li class="pricing-feature">1 Project</li>
+                            <li class="pricing-feature">Up to 5 Admin Users</li>
+                            <li class="pricing-feature">WBS CSV Import</li>
+                            <li class="pricing-feature">Standard Reports</li>
+                            <li class="pricing-feature">File Storage: 20 per project</li>
+                            <li class="pricing-feature">Chatbot Access: 10 prompts/week</li>
+                        </ul>
+                    </div>
+
+                    <p class="text-xs text-slate-400 italic mb-6">Entry-level solution for teams getting started with
+                        project management.</p>
+
+                    <button onclick="showSignupModal('basic');" aria-label="Sign up for Basic plan"
+                        class="w-full py-3 px-6 font-semibold text-white rounded-lg transition-all duration-300 bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-600 hover:to-blue-700 glow-on-hover shadow-lg">
+                        Get Started with Basic
+                    </button>
+                </div>
+
+                <!-- Plus Plan Card (Most Popular) -->
+                <div
+                    class="glass-card rounded-xl p-8 transition-all duration-300 flex flex-col relative border-2 border-purple-500 recommended fade-up delay-200 transform scale-105 z-10">
+                    <div class="absolute -top-4 left-1/2 transform -translate-x-1/2">
+                        <span
+                            class="bg-gradient-to-r from-purple-600 to-pink-600 text-white text-xs font-bold px-4 py-1 rounded-full shadow-lg">MOST
+                            POPULAR</span>
+                    </div>
+                    <div class="text-xs inline-block px-3 py-1 rounded-full bg-purple-600 text-white mb-4 w-fit">
+                        RECOMMENDED</div>
+                    <h3 class="text-2xl font-bold text-white mb-2">Plus Plan</h3>
+                    <p class="text-sm text-slate-300 mb-4">Ideal for growing businesses</p>
+
+                    <div class="mb-6">
+                        <div class="text-4xl font-bold text-white mb-1">₹2,600<span
+                                class="text-lg text-slate-300 font-normal">/month</span></div>
+                        <p class="text-xs text-slate-400">Up to 10 admin users included</p>
+                    </div>
+
+                    <div class="mb-8 flex-grow">
+                        <h4 class="text-sm font-semibold text-slate-300 mb-3">Everything in Basic, plus:</h4>
+                        <ul class="space-y-2 text-slate-300 text-sm">
+                            <li class="pricing-feature">10 Projects</li>
+                            <li class="pricing-feature">Up to 10 Admin Users</li>
+                            <li class="pricing-feature">Multilingual Chatbot</li>
+                            <li class="pricing-feature">100 AI prompts/week</li>
+                            <li class="pricing-feature">Secure Client Portal & Communication</li>
+                            <li class="pricing-feature">Advanced Dashboards (S-Curve)</li>
+                        </ul>
+                    </div>
+
+                    <p class="text-xs text-slate-300 italic mb-6">Best value for teams scaling operations with advanced
+                        analytics and collaboration.</p>
+
+                    <button onclick="showSignupModal('si_plus');" aria-label="Sign up for Plus plan - Most Popular"
+                        class="w-full py-3 px-6 font-semibold text-white rounded-lg transition-all duration-300 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 shadow-xl hover:shadow-2xl">
+                        Get Started with Plus
+                    </button>
+                </div>
+
+                <!-- Pro Plan Card -->
+                <div
+                    class="glass-card rounded-xl p-8 hover:bg-white/10 transition-all duration-300 flex flex-col fade-up delay-300">
+                    <div class="text-xs inline-block px-3 py-1 rounded-full bg-blue-700 text-blue-100 mb-4 w-fit">
+                        ENTERPRISE</div>
+                    <h3 class="text-2xl font-bold text-white mb-2">Pro Plan</h3>
+                    <p class="text-sm text-slate-400 mb-4">Built for large enterprises</p>
+
+                    <div class="mb-6">
+                        <div class="text-4xl font-bold text-white mb-1">₹4,300<span
+                                class="text-lg text-slate-400 font-normal">/month</span></div>
+                        <p class="text-xs text-slate-500">Unlimited users (custom pricing beyond 100)</p>
+                    </div>
+
+                    <div class="mb-8 flex-grow">
+                        <h4 class="text-sm font-semibold text-slate-300 mb-3">Everything in Plus, plus:</h4>
+                        <ul class="space-y-2 text-slate-300 text-sm">
+                            <li class="pricing-feature">Unlimited Projects & Users</li>
+                            <li class="pricing-feature">Full Activity Logging (Audit & Compliance)</li>
+                            <li class="pricing-feature">AI Risk Assessment & Mitigation</li>
+                            <li class="pricing-feature">Unlimited AI prompts</li>
+                            <li class="pricing-feature">SSO Integration (AWS)</li>
+                            <li class="pricing-feature">API Access & Custom Integrations</li>
+                            <li class="pricing-feature">Dedicated Account Manager</li>
+                        </ul>
+                    </div>
+
+                    <p class="text-xs text-slate-400 italic mb-6">Enterprise-grade solution with unlimited resources and
+                        premium support.</p>
+
+                    <button onclick="showSignupModal('pro');" aria-label="Sign up for Pro plan"
+                        class="w-full py-3 px-6 font-semibold text-white rounded-lg transition-all duration-300 bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-700 hover:to-cyan-700 glow-on-hover shadow-lg">
+                        Get Started with Pro
+                    </button>
+                </div>
+            </div>
+
+            <div class="mt-12 text-center">
+                <p class="text-slate-400 text-sm mb-4">
+                    All plans include: Real-time Analytics, Dynamic Gantt Charts, Secure Access Control, Mobile
+                    Responsive Design, and Data Export capabilities.
+                </p>
+                <p class="text-slate-300 text-sm">
+                    Need a custom solution? <a href="mailto:sales@simonindia.com"
+                        class="text-sky-400 hover:text-sky-300 underline">Contact our sales team</a>
+                </p>
+            </div>
+        </div>
+    </section>
+
+    <section id="about" class="py-20 bg-black/20">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="text-center mb-16">
+                <h2 class="text-3xl sm:text-4xl font-bold text-white mb-4">About Simon India Limited</h2>
+                <p class="text-xl text-slate-300 max-w-3xl mx-auto">
+                    A leading innovator in technology solutions with over a century of global experience, now bringing
+                    cutting-edge project management tools to transform your business operations.
+                </p>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
+                <div class="space-y-6">
+                    <div class="glass-card rounded-xl p-6">
+                        <h3 class="text-xl font-semibold text-white mb-3">Global Heritage</h3>
+                        <p class="text-slate-300">
+                            With roots dating back to 1916, Simon has been enhancing lives worldwide through innovative
+                            electrical and technology solutions across multiple continents.
+                        </p>
+                    </div>
+                    <div class="glass-card rounded-xl p-6">
+                        <h3 class="text-xl font-semibold text-white mb-3">Innovation Leadership</h3>
+                        <p class="text-slate-300">
+                            From electrical infrastructure to advanced project management platforms, we continuously
+                            evolve to meet the changing needs of modern businesses.
+                        </p>
+                    </div>
+                    <div class="glass-card rounded-xl p-6">
+                        <h3 class="text-xl font-semibold text-white mb-3">Trusted Partnership</h3>
+                        <p class="text-slate-300">
+                            Our exclusive partnerships and collaborations ensure that we deliver world-class solutions
+                            backed by global expertise and local understanding.
+                        </p>
+                    </div>
+                </div>
+                <div class="glass-card rounded-xl p-8">
+                    <h3 class="text-2xl font-bold text-white mb-6">Why Choose Simon India?</h3>
+                    <ul class="space-y-4 text-slate-300">
+                        <li class="flex items-center">
+                            <div class="w-2 h-2 bg-sky-400 rounded-full mr-3"></div>
+                            Over 100 years of global experience and expertise
+                        </li>
+                        <li class="flex items-center">
+                            <div class="w-2 h-2 bg-sky-400 rounded-full mr-3"></div>
+                            Proven track record in international and national projects
+                        </li>
+                        <li class="flex items-center">
+                            <div class="w-2 h-2 bg-sky-400 rounded-full mr-3"></div>
+                            Cutting-edge technology solutions and innovations
+                        </li>
+                        <li class="flex items-center">
+                            <div class="w-2 h-2 bg-sky-400 rounded-full mr-3"></div>
+                            Commitment to quality and customer satisfaction
+                        </li>
+                        <li class="flex items-center">
+                            <div class="w-2 h-2 bg-sky-400 rounded-full mr-3"></div>
+                            Strategic partnerships with global technology leaders
+                        </li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <footer class="py-12 bg-black/40 border-t border-white/10 mt-auto">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex flex-col md:flex-row justify-between items-center">
+                <div class="flex items-center mb-4 md:mb-0">
+                </div>
+                <div class="text-center md:text-right">
+                    <p class="text-slate-400 text-sm mb-2">
+                        Developed by Simon India Limited
+                    </p>
+                    <p class="text-slate-500 text-xs">
+                        © 2025 Simon India Limited. All rights reserved.
+                    </p>
+                    <div class="text-center text-xs text-slate-400 mt-4">
+                        Secured by <a href="https://razorpay.com" target="_blank"
+                            class="text-blue-600 hover:underline">Razorpay</a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </footer>
+
+    <div id="loginModal"
+        class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 hidden">
+        <div
+            class="w-full max-w-5xl bg-white rounded-2xl shadow-2xl overflow-hidden relative flex flex-col md:flex-row">
+            <button onclick="hideLoginModal()"
+                class="absolute top-4 right-4 text-slate-500 hover:text-slate-700 z-10 bg-white/80 rounded-full p-1">
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12">
+                    </path>
+                </svg>
+            </button>
+
+            <!-- Left Side - Design Panel -->
+            <div
+                class="hidden md:flex md:w-2/5 bg-gradient-to-br from-purple-600 via-blue-600 to-sky-500 relative overflow-hidden">
+                <!-- Abstract Pattern Background -->
+                <div class="absolute inset-0 opacity-20">
+                    <svg class="w-full h-full" viewBox="0 0 400 400" xmlns="http://www.w3.org/2000/svg">
+                        <defs>
+                            <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+                                <path d="M 40 0 L 0 0 0 40" fill="none" stroke="white" stroke-width="1" opacity="0.3" />
+                            </pattern>
+                        </defs>
+                        <rect width="100%" height="100%" fill="url(#grid)" />
+                        <!-- Abstract shapes -->
+                        <circle cx="100" cy="100" r="60" fill="white" opacity="0.1" />
+                        <circle cx="300" cy="200" r="80" fill="white" opacity="0.08" />
+                        <circle cx="200" cy="300" r="50" fill="white" opacity="0.12" />
+                        <path d="M 50 200 Q 150 100, 250 200 T 350 200" stroke="white" stroke-width="2" fill="none"
+                            opacity="0.15" />
+                        <path d="M 100 350 Q 200 250, 300 350" stroke="white" stroke-width="2" fill="none"
+                            opacity="0.15" />
+                    </svg>
+                </div>
+
+                <!-- Content -->
+                <div class="relative z-10 flex flex-col justify-between p-8 md:p-12 h-full text-white">
+                    <div>
+                        <div class="mb-8">
+                            <h2 class="text-3xl md:text-4xl font-bold mb-2">Welcome to PROTON</h2>
+                            <p class="text-lg text-white/90">AI-Enabled Project Control Tower</p>
+                        </div>
+                        <div class="space-y-6 mt-12">
+                            <div class="flex items-start space-x-4">
+                                <div
+                                    class="flex-shrink-0 w-12 h-12 bg-white/20 rounded-lg flex items-center justify-center backdrop-blur-sm">
+                                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                            d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z">
+                                        </path>
+                                    </svg>
+                                </div>
+                                <div>
+                                    <h3 class="font-semibold text-lg mb-1">Real-time Analytics</h3>
+                                    <p class="text-white/80 text-sm">Monitor project progress with advanced insights</p>
+                                </div>
+                            </div>
+                            <div class="flex items-start space-x-4">
+                                <div
+                                    class="flex-shrink-0 w-12 h-12 bg-white/20 rounded-lg flex items-center justify-center backdrop-blur-sm">
+                                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                            d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z">
+                                        </path>
+                                    </svg>
+                                </div>
+                                <div>
+                                    <h3 class="font-semibold text-lg mb-1">AI-Powered Insights</h3>
+                                    <p class="text-white/80 text-sm">Get intelligent recommendations and automated
+                                        analysis</p>
+                                </div>
+                            </div>
+                            <div class="flex items-start space-x-4">
+                                <div
+                                    class="flex-shrink-0 w-12 h-12 bg-white/20 rounded-lg flex items-center justify-center backdrop-blur-sm">
+                                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                            d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z">
+                                        </path>
+                                    </svg>
+                                </div>
+                                <div>
+                                    <h3 class="font-semibold text-lg mb-1">Dynamic Gantt Charts</h3>
+                                    <p class="text-white/80 text-sm">Visualize timelines with interactive project
+                                        tracking</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="mt-8 pt-8 border-t border-white/20">
+                        <p class="text-sm text-white/70">Transform your project management with PROTON</p>
+                        <p class="text-xs text-white/60 mt-1">Developed by Simon India Limited</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right Side - Login Form -->
+            <div class="w-full md:w-3/5 bg-white p-6 md:p-8 lg:p-12 flex flex-col justify-center">
+                <div class="mb-6">
+                    <h2 class="text-2xl md:text-3xl font-bold text-slate-800 mb-2">Access PROTON</h2>
+                    <p class="text-slate-600">Choose your login type to continue</p>
+                </div>
+
+                <div class="flex mb-6 bg-slate-100 rounded-lg p-1">
+                    <button onclick="setLoginType('admin')" id="adminTab"
+                        class="flex-1 py-3 text-center font-semibold text-sm cursor-pointer transition-colors rounded-md bg-sky-600 text-white">
+                        Admin Login
+                    </button>
+                    <button onclick="setLoginType('client')" id="clientTab"
+                        class="flex-1 py-3 text-center font-semibold text-sm cursor-pointer transition-colors rounded-md text-slate-500 hover:text-slate-700">
+                        Client Login
+                    </button>
+                </div>
+
+                <form id="loginForm" onsubmit="handleLogin(event)">
+                    <div class="relative min-h-[180px]" id="loginFields">
+                        <div id="adminFields" class="space-y-4">
+                            <div>
+                                <label for="email" class="block text-sm font-medium text-slate-700 mb-1">Email
+                                    Address</label>
+                                <input type="email" id="email" name="email"
+                                    class="w-full p-3 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500"
+                                    placeholder="your@email.com">
+                            </div>
+                            <div>
+                                <label for="password"
+                                    class="block text-sm font-medium text-slate-700 mb-1">Password</label>
+                                <div class="relative">
+                                    <input type="password" id="password" name="password"
+                                        class="w-full p-3 pr-10 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500"
+                                        placeholder="Enter your password">
+                                    <button type="button" onclick="togglePasswordVisibility('password')"
+                                        class="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600">
+                                        <svg id="password-eye" class="w-5 h-5" fill="none" stroke="currentColor"
+                                            viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                                d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                                d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z">
+                                            </path>
+                                        </svg>
+                                    </button>
+                                </div>
+                            </div>
+                            <div id="otpSection" class="hidden space-y-4">
+                                <div class="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
+                                    <p class="text-sm text-blue-800">
+                                        <svg class="inline w-5 h-5 mr-1" fill="currentColor" viewBox="0 0 20 20">
+                                            <path
+                                                d="M2.003 5.884L10 9.882l7.997-3.998A2 2 0 0016 4H4a2 2 0 00-1.997 1.884z">
+                                            </path>
+                                            <path
+                                                d="M18 8.118l-8 4-8-4V14a2 2 0 002 2h12a2 2 0 002-2V8.118z">
+                                            </path>
+                                        </svg>
+                                        We've sent a 6-digit OTP to <strong id="otpEmailDisplay"></strong>
+                                    </p>
+                                    <p class="text-xs text-blue-600 mt-1">Code expires in <span id="otpTimer"
+                                            class="font-semibold">10:00</span></p>
+                                </div>
+                                <div>
+                                    <label for="otpCode"
+                                        class="block text-sm font-medium text-slate-700 mb-1">Enter OTP Code</label>
+                                    <input type="text" id="otpCode" name="otpCode" maxlength="6" pattern="[0-9]{6}"
+                                        inputmode="numeric"
+                                        class="w-full p-3 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500 text-center text-2xl tracking-widest font-mono"
+                                        placeholder="000000" autocomplete="off">
+                                    <p class="text-xs text-slate-500 mt-1 text-center">Didn't receive the code? <button
+                                            type="button" id="resendOtpBtn" onclick="resendOTP()"
+                                            class="text-sky-600 hover:text-sky-500 font-medium">Resend OTP</button></p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div id="clientFields" class="hidden absolute inset-0 space-y-4">
+                            <div>
+                                <label for="accessCode" class="block text-sm font-medium text-slate-700 mb-1">Client
+                                    Access
+                                    Code</label>
+                                <input type="text" id="accessCode" name="accessCode"
+                                    class="w-full p-3 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500"
+                                    placeholder="Enter your client access code">
+                            </div>
+                            <div class="opacity-0 pointer-events-none h-[73px]">
+                                <!-- Spacer to match admin password field height (label + input + spacing) -->
+                            </div>
+                        </div>
+                    </div>
+
+                <div id="forgotPasswordLink" class="text-right mt-3 hidden">
+                    <button type="button" onclick="showForgotPasswordModal()"
+                        class="text-sm text-sky-600 hover:text-sky-500 font-medium">Forgot Password?</button>
+                </div>
+
+                    <button type="submit" id="loginButton"
+                        class="w-full mt-6 py-3 px-4 font-semibold text-white rounded-lg transition-colors duration-300 bg-gradient-to-r from-sky-600 to-blue-600 hover:from-sky-700 hover:to-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2">
+                        Login as Admin
+                    </button>
+                    <p id="loginFeedback" class="mt-4 text-sm hidden"></p>
+                </form>
+
+                <div class="text-center mt-6">
+                    <p class="text-sm text-slate-600">
+                        Don't have an account?
+                        <button onclick="showSignupModal()" class="font-medium text-sky-600 hover:text-sky-500">Sign
+                            Up</button>
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div id="forgotPasswordModal"
+        class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 hidden"
+        role="dialog" aria-modal="true" aria-labelledby="forgotPasswordTitle">
+        <div
+            class="w-full max-w-md bg-white/95 backdrop-blur-md p-6 sm:p-8 rounded-2xl shadow-2xl border border-white/20 relative">
+            <button onclick="hideForgotPasswordModal()"
+                class="absolute top-4 right-4 text-slate-500 hover:text-slate-700" aria-label="Close forgot password">
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12">
+                    </path>
+                </svg>
+            </button>
+
+            <div class="text-center mb-6">
+                <h2 id="forgotPasswordTitle" class="text-2xl font-bold text-slate-800 mb-1">Reset Your Password</h2>
+                <p class="text-slate-600">Enter your email address to receive a password reset link.</p>
+            </div>
+
+            <form id="forgotPasswordForm" onsubmit="handleForgotPassword(event)" novalidate>
+                <div class="space-y-4">
+                    <div>
+                        <label for="forgotPasswordEmail" class="block text-sm font-medium text-slate-700 mb-1">Email
+                            Address</label>
+                        <input type="email" id="forgotPasswordEmail" name="forgotPasswordEmail"
+                            class="w-full p-3 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500"
+                            placeholder="your@email.com" required>
+                    </div>
+                </div>
+
+                <button type="submit" id="forgotPasswordSubmit"
+                    class="w-full mt-6 py-3 px-4 font-semibold text-white rounded-lg transition-colors duration-300 bg-gradient-to-r from-sky-600 to-blue-600 hover:from-sky-700 hover:to-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2">
+                    Send Reset Link
+                </button>
+                <p id="forgotPasswordFeedback" class="mt-4 text-sm hidden" aria-live="polite"></p>
+
+                <div class="text-center mt-6">
+                    <button type="button" onclick="hideForgotPasswordModal(); showLoginModal();"
+                        class="text-sm text-slate-600 hover:text-slate-800 font-medium">Back to Login</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div id="resetPasswordModal"
+        class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 hidden" role="dialog"
+        aria-modal="true" aria-labelledby="resetPasswordTitle">
+        <div
+            class="w-full max-w-md bg-white/95 backdrop-blur-md p-6 sm:p-8 rounded-2xl shadow-2xl border border-white/20 relative">
+            <button onclick="hideResetPasswordModal()"
+                class="absolute top-4 right-4 text-slate-500 hover:text-slate-700" aria-label="Close reset password">
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12">
+                    </path>
+                </svg>
+            </button>
+
+            <div class="text-center mb-6">
+                <h2 id="resetPasswordTitle" class="text-2xl font-bold text-slate-800 mb-1">Create New Password</h2>
+                <p class="text-slate-600">Choose a strong password to secure your account.</p>
+            </div>
+
+            <form id="resetPasswordForm" onsubmit="handleResetPassword(event)" novalidate>
+                <input type="hidden" id="resetToken">
+                <div class="space-y-4">
+                    <div>
+                        <label for="newPassword" class="block text-sm font-medium text-slate-700 mb-1">New
+                            Password</label>
+                        <div class="relative">
+                            <input type="password" id="newPassword"
+                                class="w-full p-3 pr-10 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
+                                placeholder="Enter a strong password" required oninput="updateResetPasswordStrength()">
+                            <button type="button" onclick="togglePasswordVisibility('newPassword')"
+                                class="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600"
+                                aria-label="Toggle new password visibility">
+                                <svg id="newPassword-eye" class="w-5 h-5" fill="none" stroke="currentColor"
+                                    viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                        d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                        d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z">
+                                    </path>
+                                </svg>
+                            </button>
+                        </div>
+                        <div class="w-full bg-slate-200 rounded mt-2">
+                            <div id="resetPasswordStrengthBar" class="password-strength-bar strength-weak"></div>
+                        </div>
+                        <p class="text-xs text-slate-500 mt-1">Must include uppercase, lowercase, number, and special
+                            character.</p>
+                    </div>
+                    <div>
+                        <label for="confirmNewPassword" class="block text-sm font-medium text-slate-700 mb-1">Confirm
+                            Password</label>
+                        <div class="relative">
+                            <input type="password" id="confirmNewPassword"
+                                class="w-full p-3 pr-10 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
+                                placeholder="Re-enter your password" required oninput="validateResetPasswordMatch()">
+                            <button type="button" onclick="togglePasswordVisibility('confirmNewPassword')"
+                                class="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600"
+                                aria-label="Toggle confirm password visibility">
+                                <svg id="confirmNewPassword-eye" class="w-5 h-5" fill="none" stroke="currentColor"
+                                    viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                        d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                        d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z">
+                                    </path>
+                                </svg>
+                            </button>
+                        </div>
+                        <div id="resetPasswordMatchHelp" class="validation-error mt-2 hidden" role="alert"
+                            aria-live="polite"></div>
+                    </div>
+                </div>
+
+                <button type="submit" id="resetPasswordSubmit"
+                    class="w-full mt-6 py-3 px-4 font-semibold text-white rounded-lg transition-colors duration-300 bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2">
+                    Reset Password
+                </button>
+                <p id="resetPasswordFeedback" class="mt-4 text-sm hidden" aria-live="polite"></p>
+
+                <div class="text-center mt-6">
+                    <button type="button" onclick="hideResetPasswordModal(); showLoginModal();"
+                        class="text-sm text-slate-600 hover:text-slate-800 font-medium">Back to Login</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Organization Signup Modal -->
+    <div id="orgSignupModal"
+        class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 hidden"
+        role="dialog" aria-modal="true" aria-labelledby="orgSignupTitle">
+        <div
+            class="w-full max-w-3xl bg-white/95 backdrop-blur-md p-6 sm:p-8 rounded-2xl shadow-2xl border border-white/20 relative">
+            <button onclick="hideSignupModal()" class="absolute top-4 right-4 text-slate-500 hover:text-slate-700"
+                aria-label="Close organization signup">
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12">
+                    </path>
+                </svg>
+            </button>
+
+            <div class="text-center mb-6">
+                <h2 id="orgSignupTitle" class="text-2xl font-bold text-slate-800 mb-1">Sign Up for PROTON</h2>
+                <p class="text-slate-600">Create your organization and choose a plan to get started</p>
+            </div>
+
+            <form id="orgSignupForm" onsubmit="handleOrgSignup(event)" novalidate>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div>
+                        <label for="orgName" class="block text-sm font-medium text-slate-700 mb-1">Organization
+                            Name</label>
+                        <input aria-label="Organization Name" aria-describedby="orgNameHelp" type="text" id="orgName"
+                            class="w-full p-3 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
+                            placeholder="Your Company Name" required>
+                        <div id="orgNameHelp" class="validation-error" role="alert" aria-live="polite"
+                            style="display:none"></div>
+                    </div>
+                    <div>
+                        <label for="orgAdminEmail" class="block text-sm font-medium text-slate-700 mb-1">Admin Email
+                            Address</label>
+                        <input aria-label="Admin Email Address" aria-describedby="orgAdminEmailHelp" type="email"
+                            id="orgAdminEmail"
+                            class="w-full p-3 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
+                            placeholder="admin@yourcompany.com" required>
+                        <div id="orgAdminEmailHelp" class="validation-error" role="alert" aria-live="polite"
+                            style="display:none"></div>
+                    </div>
+                    <div>
+                        <label for="orgAdminPassword"
+                            class="block text-sm font-medium text-slate-700 mb-1">Password</label>
+                        <div class="relative">
+                            <input aria-label="Password" aria-describedby="orgAdminPasswordHelp" type="password"
+                                id="orgAdminPassword"
+                                class="w-full p-3 pr-10 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
+                                placeholder="Choose a strong password" required oninput="updatePasswordStrength()">
+                            <button type="button" onclick="togglePasswordVisibility('orgAdminPassword')"
+                                class="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600"
+                                aria-label="Toggle password visibility">
+                                <svg id="orgAdminPassword-eye" class="w-5 h-5" fill="none" stroke="currentColor"
+                                    viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                        d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                        d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z">
+                                    </path>
+                                </svg>
+                            </button>
+                        </div>
+                        <div class="w-full bg-slate-200 rounded mt-2">
+                            <div id="passwordStrengthBar" class="password-strength-bar strength-weak"></div>
+                        </div>
+                        <p class="text-xs text-slate-500 mt-1">Must be 8+ characters with uppercase, lowercase, number,
+                            and special character</p>
+                        <div id="orgAdminPasswordHelp" class="validation-error" role="alert" aria-live="polite"
+                            style="display:none"></div>
+                    </div>
+                    <div>
+                        <label for="orgConfirmPassword" class="block text-sm font-medium text-slate-700 mb-1">Confirm
+                            Password</label>
+                        <input aria-label="Confirm Password" aria-describedby="orgConfirmPasswordHelp" type="password"
+                            id="orgConfirmPassword"
+                            class="w-full p-3 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
+                            placeholder="Re-enter your password" required oninput="validatePasswordMatch()">
+                        <div id="orgConfirmPasswordHelp" class="validation-error" role="alert" aria-live="polite"
+                            style="display:none"></div>
+                    </div>
+                </div>
+
+                <div class="mt-6">
+                    <h3 class="text-lg font-semibold text-slate-800 mb-3">Choose Your Plan</h3>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                        <div id="plan-basic" class="plan-card border rounded-xl p-4" data-plan="basic">
+                            <div class="text-xs inline-block px-2 py-1 rounded bg-slate-100 text-slate-700 mb-2">STARTER
+                            </div>
+                            <h4 class="text-xl font-bold text-slate-800">Basic</h4>
+                            <p id="plan-basic-price" class="text-2xl font-bold text-slate-800 mb-3">₹1,700<span
+                                    class="text-sm font-normal text-slate-600">/month</span></p>
+                            <div class="flex items-center">
+                                <input type="radio" name="plan" value="basic" id="planBasic" class="mr-2">
+                                <label for="planBasic" class="text-sm">Choose Basic Plan</label>
+                            </div>
+                        </div>
+                        <div id="plan-si-plus" class="plan-card border rounded-xl p-4 recommended selected"
+                            data-plan="si_plus">
+                            <div class="text-xs inline-block px-2 py-1 rounded bg-purple-100 text-purple-700 mb-2">
+                                POPULAR</div>
+                            <h4 class="text-xl font-bold text-slate-800">Plus</h4>
+                            <p id="plan-si-plus-price" class="text-2xl font-bold text-slate-800 mb-3">₹2,600<span
+                                    class="text-sm font-normal text-slate-600">/month</span></p>
+                            <div class="flex items-center">
+                                <input type="radio" name="plan" value="si_plus" id="planSiPlus" class="mr-2" checked>
+                                <label for="planSiPlus" class="text-sm">Choose Plus Plan</label>
+                            </div>
+                        </div>
+                        <div id="plan-pro" class="plan-card border rounded-xl p-4" data-plan="pro">
+                            <div class="text-xs inline-block px-2 py-1 rounded bg-blue-100 text-blue-700 mb-2">
+                                ENTERPRISE</div>
+                            <h4 class="text-xl font-bold text-slate-800">Pro</h4>
+                            <p id="plan-pro-price" class="text-2xl font-bold text-slate-800 mb-3">₹4,300<span
+                                    class="text-sm font-normal text-slate-600">/month</span></p>
+                            <div class="flex items-center">
+                                <input type="radio" name="plan" value="pro" id="planPro" class="mr-2">
+                                <label for="planPro" class="text-sm">Choose Pro Plan</label>
+                            </div>
+                        </div>
+                    </div>
+                    <p class="text-center text-slate-500 text-sm mt-3">All plans include a 7-day free trial. No credit
+                        card required.</p>
+                </div>
+
+                <!-- OTP Section (hidden initially) -->
+                <div id="orgSignupOtpSection" class="hidden mt-6">
+                    <div class="bg-sky-50 border border-sky-200 rounded-lg p-4 mb-4">
+                        <p class="text-sm text-sky-700">
+                            <strong>OTP sent to:</strong> <span id="orgSignupOtpEmailDisplay" class="font-mono"></span>
+                        </p>
+                        <p class="text-xs text-sky-600 mt-1">Please check your email and enter the 6-digit code below.</p>
+                    </div>
+                    <label for="orgSignupOtpCode" class="block text-sm font-medium text-slate-700 mb-1">Enter OTP Code</label>
+                    <input type="text" id="orgSignupOtpCode" maxlength="6" pattern="[0-9]{6}"
+                        class="w-full p-3 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 text-center text-2xl font-mono tracking-widest"
+                        placeholder="000000" required>
+                    <p id="orgSignupOtpTimer" class="text-xs text-slate-500 mt-2 text-center"></p>
+                </div>
+
+                <button id="orgSignupButton" type="submit"
+                    class="w-full mt-6 py-3 px-4 font-semibold text-white rounded-lg transition-colors duration-300 bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2">
+                    Sign Up
+                </button>
+
+                <div class="text-center mt-4 text-sm text-slate-600">
+                    Already have an account? <button type="button" onclick="showLoginModal()"
+                        class="font-medium text-purple-600 hover:text-purple-500">Login</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Payment Option Modal -->
+    <div id="paymentOptionModal"
+        class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 hidden">
+        <div
+            class="w-full max-w-md bg-white/95 backdrop-blur-md p-8 rounded-2xl shadow-2xl border border-white/20 relative modal-content">
+            <button onclick="hidePaymentOptionModal()"
+                class="absolute top-4 right-4 text-slate-500 hover:text-slate-700">
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12">
+                    </path>
+                </svg>
+            </button>
+            <div class="text-center mb-6">
+                <h2 class="text-2xl font-bold text-slate-800 mb-2">Start Your Subscription</h2>
+                <p class="text-slate-600">You're on a 7-day free trial. Upgrade now to continue after trial ends.</p>
+            </div>
+            <div class="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6 plan-details">
+                <p class="text-sm text-blue-700 mb-2"><strong>Selected Plan:</strong> <span
+                        id="selectedPlanName">SI+</span></p>
+                <p class="text-sm text-blue-700 mb-2"><strong>Price:</strong> <span
+                        id="selectedPlanPrice">₹18/user/month</span></p>
+                <p class="text-sm text-blue-700"><strong>Trial:</strong> 7 days free, then billing starts</p>
+            </div>
+            <div class="space-y-4">
+                <button onclick="initiatePayment(event, this)"
+                    class="w-full py-3 px-4 font-semibold text-white rounded-lg bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700">
+                    Upgrade Now
+                </button>
+                <button onclick="skipPayment()"
+                    class="w-full py-3 px-4 font-semibold text-slate-700 rounded-lg border border-slate-300 hover:bg-slate-50">
+                    Continue with Trial
+                </button>
+            </div>
+            <p class="text-xs text-slate-500 text-center mt-4">You can upgrade anytime from your dashboard</p>
+        </div>
+    </div>
+
+    <!-- Payment Success Modal -->
+    <div id="paymentSuccessModal"
+        class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 hidden">
+        <div
+            class="w-full max-w-md bg-white/95 backdrop-blur-md p-8 rounded-2xl shadow-2xl border border-white/20 relative text-center modal-content">
+            <div class="mb-6">
+                <div
+                    class="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4 success-icon">
+                    <svg class="w-8 h-8 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                    </svg>
+                </div>
+                <h2 class="text-2xl font-bold text-slate-800 mb-2">Payment Successful!</h2>
+                <p class="text-slate-600">Your subscription is now active. Welcome to PROTON!</p>
+            </div>
+            <div class="bg-green-50 border border-green-200 rounded-lg p-4 mb-6 text-left">
+                <p class="text-sm text-green-700 mb-1">✓ Subscription activated</p>
+                <p class="text-sm text-green-700 mb-1">✓ Email verification sent</p>
+                <p class="text-sm text-green-700">✓ Full access granted</p>
+            </div>
+            <button onclick="redirectToLogin()"
+                class="w-full py-3 px-4 font-semibold text-white rounded-lg bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700">
+                Go to Login
+            </button>
+        </div>
+    </div>
+
+    <!-- SuperAdmin Signup Modal -->
+    <div id="superadminSignupModal"
+        class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 hidden"
+        role="dialog" aria-modal="true" aria-labelledby="superadminSignupTitle">
+        <div
+            class="w-full max-w-md bg-white/95 backdrop-blur-md p-6 sm:p-8 rounded-2xl shadow-2xl border border-white/20 relative">
+            <button onclick="hideSuperAdminSignupModal()"
+                class="absolute top-4 right-4 text-slate-500 hover:text-slate-700" aria-label="Close SuperAdmin signup">
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12">
+                    </path>
+                </svg>
+            </button>
+
+            <div class="text-center mb-6">
+                <h2 id="superadminSignupTitle" class="text-2xl font-bold text-slate-800 mb-1">SuperAdmin Signup</h2>
+                <p class="text-slate-600">Platform Administrator Account Creation</p>
+            </div>
+
+            <div class="bg-red-50 border-l-4 border-red-500 p-4 mb-6 warning-banner">
+                <div class="flex items-center">
+                    <svg class="w-5 h-5 text-red-500 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                            d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z">
+                        </path>
+                    </svg>
+                    <p class="text-sm text-red-700 font-medium">⚠️ SuperAdmin accounts have full platform access. Only
+                        create if authorized.</p>
+                </div>
+            </div>
+
+            <form id="superadminSignupForm" onsubmit="handleSuperAdminSignup(event)" novalidate>
+                <div class="space-y-4">
+                    <div>
+                        <label for="superadminEmail" class="block text-sm font-medium text-slate-700 mb-1">SuperAdmin
+                            Email</label>
+                        <input aria-label="SuperAdmin Email Address" aria-describedby="superadminEmailHelp" type="email"
+                            id="superadminEmail"
+                            class="w-full p-3 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
+                            placeholder="admin@proton.simonindia.ai" required>
+                        <div id="superadminEmailHelp" class="validation-error" role="alert" aria-live="polite"
+                            style="display:none"></div>
+                    </div>
+                    <div>
+                        <label for="superadminPassword"
+                            class="block text-sm font-medium text-slate-700 mb-1">Password</label>
+                        <div class="relative">
+                            <input aria-label="Password" aria-describedby="superadminPasswordHelp" type="password"
+                                id="superadminPassword"
+                                class="w-full p-3 pr-10 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
+                                placeholder="Choose a strong password" required
+                                oninput="updateSuperAdminPasswordStrength()">
+                            <button type="button" onclick="togglePasswordVisibility('superadminPassword')"
+                                class="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600"
+                                aria-label="Toggle password visibility">
+                                <svg id="superadminPassword-eye" class="w-5 h-5" fill="none" stroke="currentColor"
+                                    viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                        d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                        d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z">
+                                    </path>
+                                </svg>
+                            </button>
+                        </div>
+                        <div class="w-full bg-slate-200 rounded mt-2">
+                            <div id="superadminPasswordStrengthBar" class="password-strength-bar strength-weak"></div>
+                        </div>
+                        <p class="text-xs text-slate-500 mt-1">Must be 8+ characters with uppercase, lowercase, number,
+                            and special character</p>
+                        <div id="superadminPasswordHelp" class="validation-error" role="alert" aria-live="polite"
+                            style="display:none"></div>
+                    </div>
+                    <div>
+                        <label for="superadminConfirmPassword"
+                            class="block text-sm font-medium text-slate-700 mb-1">Confirm Password</label>
+                        <input aria-label="Confirm Password" aria-describedby="superadminConfirmPasswordHelp"
+                            type="password" id="superadminConfirmPassword"
+                            class="w-full p-3 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
+                            placeholder="Re-enter your password" required oninput="validateSuperAdminPasswordMatch()">
+                        <div id="superadminConfirmPasswordHelp" class="validation-error" role="alert" aria-live="polite"
+                            style="display:none"></div>
+                    </div>
+                    <div>
+                        <label for="superadminSecretKey" class="block text-sm font-medium text-slate-700 mb-1">Secret
+                            Key</label>
+                        <input aria-label="SuperAdmin Secret Key" aria-describedby="superadminSecretKeyHelp"
+                            type="password" id="superadminSecretKey"
+                            class="w-full p-3 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
+                            placeholder="Enter the SuperAdmin secret key" required>
+                        <p class="text-xs text-slate-500 mt-1">This key is provided by the system administrator. Contact
+                            support if you don't have it.</p>
+                        <div id="superadminSecretKeyHelp" class="validation-error" role="alert" aria-live="polite"
+                            style="display:none"></div>
+                    </div>
+                </div>
+
+                <button id="superadminSignupButton" type="submit"
+                    class="w-full mt-6 py-3 px-4 font-semibold text-white rounded-lg transition-colors duration-300 bg-gradient-to-r from-purple-600 to-red-600 hover:from-purple-700 hover:to-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 submit-button">
+                    Create SuperAdmin Account
+                </button>
+
+                <div class="text-center mt-4 text-sm text-slate-600">
+                    Already have an account? <button type="button" onclick="showLoginModal()"
+                        class="font-medium text-purple-600 hover:text-purple-500">Login</button>
+                    <span class="mx-2">•</span>
+                    Need to create an organization? <button type="button" onclick="showSignupModal()"
+                        class="font-medium text-sky-600 hover:text-sky-500">Sign Up</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        let currentLoginType = 'client';
+        let currentLoginStep = 'password'; // 'password' or 'otp'
+        let otpEmail = null;
+        let otpTimerInterval = null;
+        let resetPrefillEmail = null;
+
+        function showLoginFeedback(message, variant = 'error') {
+            const feedbackEl = document.getElementById('loginFeedback');
+            if (!feedbackEl) return;
+            feedbackEl.textContent = message;
+            feedbackEl.classList.remove('hidden', 'text-red-600', 'text-green-600', 'text-sky-600');
+            if (variant === 'info') {
+                feedbackEl.classList.add('text-sky-600');
+            } else if (variant === 'success') {
+                feedbackEl.classList.add('text-green-600');
+            } else {
+                feedbackEl.classList.add('text-red-600');
+            }
+        }
+
+        function clearLoginFeedback() {
+            const feedbackEl = document.getElementById('loginFeedback');
+            if (!feedbackEl) return;
+            feedbackEl.textContent = '';
+            feedbackEl.classList.add('hidden');
+            feedbackEl.classList.remove('text-red-600', 'text-green-600', 'text-sky-600');
+        }
+
+        function shouldResetAfterError(statusCode, message) {
+            const fatalCodes = [403, 404, 410];
+            if (statusCode && statusCode >= 500) return true;
+            if (statusCode && fatalCodes.includes(statusCode)) return true;
+            if (!message) return false;
+            const normalized = message.toLowerCase();
+            const fatalPhrases = ['locked', 'pending', 'contact support', 'not allowed', 'expired'];
+            return fatalPhrases.some((phrase) => normalized.includes(phrase));
+        }
+        // Razorpay Configuration
+        const RAZORPAY_KEY_ID = '{{ razorpay_key_id }}';
+        const RAZORPAY_ENABLED = RAZORPAY_KEY_ID && RAZORPAY_KEY_ID !== '';
+        // Payment flow state
+        let pendingSubscriptionData = null;
+        let isProcessingPayment = false;
+
+        // Single source of truth for plan prices
+        const planPrices = { 'basic': '₹1,700/month', 'si_plus': '₹2,600/month', 'pro': '₹4,300/month' };
+
+        // Set initial required attributes for client login
+
+        // Helper function to base64url-decode JWT payloads
+        // Replaces base64url characters (- → +, _ → /) and adds padding (=)
+        function decodeBase64Url(base64Url) {
+            let base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+            while (base64.length % 4) {
+                base64 += '=';
+            }
+            return atob(base64);
+        }
+
+        function showLoginModal() {
+            document.getElementById('orgSignupModal').classList.add('hidden');
+            document.getElementById('superadminSignupModal').classList.add('hidden');
+            document.getElementById('loginModal').classList.remove('hidden');
+            setLoginType('client');
+        }
+
+        function hideLoginModal() {
+            document.getElementById('loginModal').classList.add('hidden');
+            resetLoginForm();
+        }
+
+        function showSignupModal(planType) {
+            document.getElementById('orgSignupModal').classList.remove('hidden');
+            document.getElementById('loginModal').classList.add('hidden');
+            const form = document.getElementById('orgSignupForm');
+            if (form) {
+                form.reset();
+                syncPlanSelection();
+            }
+            if (planType) {
+                selectPlan(planType);
+            }
+            clearOrgValidation();
+        }
+
+        function hideSignupModal() {
+            document.getElementById('orgSignupModal').classList.add('hidden');
+            clearOrgValidation();
+        }
+
+        function clearOrgValidation() {
+            ['orgNameHelp', 'orgAdminEmailHelp', 'orgAdminPasswordHelp', 'orgConfirmPasswordHelp'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) { el.textContent = ''; el.style.display = 'none'; }
+            });
+            const bar = document.getElementById('passwordStrengthBar');
+            if (bar) { bar.className = 'password-strength-bar strength-weak'; }
+        }
+
+        function showValidationError(fieldHelpId, message) {
+            const el = document.getElementById(fieldHelpId);
+            if (el) { el.textContent = message; el.className = 'validation-error'; el.style.display = 'block'; }
+        }
+        function hideValidationError(fieldHelpId) {
+            const el = document.getElementById(fieldHelpId);
+            if (el) { el.textContent = ''; el.style.display = 'none'; }
+        }
+
+        function selectPlan(planType) {
+            document.querySelectorAll('.plan-card').forEach(card => card.classList.remove('selected'));
+            const map = { 'basic': 'plan-basic', 'si_plus': 'plan-si-plus', 'pro': 'plan-pro' };
+            const id = map[planType];
+            const card = document.getElementById(id);
+            if (card) card.classList.add('selected');
+            const radioId = planType === 'basic' ? 'planBasic' : planType === 'si_plus' ? 'planSiPlus' : 'planPro';
+            const radio = document.getElementById(radioId);
+            if (radio) radio.checked = true;
+        }
+
+        function syncPlanSelection() {
+            const checked = document.querySelector('input[name="plan"]:checked');
+            if (!checked) {
+                document.querySelectorAll('.plan-card').forEach(card => card.classList.remove('selected'));
+                return;
+            }
+            selectPlan(checked.value);
+        }
+
+        document.addEventListener('DOMContentLoaded', function () {
+            // Populate plan card prices from single source of truth
+            const priceMap = { 'basic': 'plan-basic-price', 'si_plus': 'plan-si-plus-price', 'pro': 'plan-pro-price' };
+            Object.keys(priceMap).forEach(planType => {
+                const priceElement = document.getElementById(priceMap[planType]);
+                if (priceElement && planPrices[planType]) {
+                    // Keep the existing "/month" span by only updating the numeric amount text node
+                    const priceText = (planPrices[planType] || '').replace(/\s*\/month\s*$/i, '');
+                    const firstNode = priceElement.firstChild;
+                    if (firstNode) {
+                        firstNode.textContent = priceText;
+                    }
+                }
+            });
+
+            document.querySelectorAll('.plan-card').forEach(card => {
+                card.addEventListener('click', function () {
+                    const planType = this.dataset.plan;
+                    selectPlan(planType);
+                });
+            });
+
+            // Check for SuperAdmin signup parameter
+            checkSuperAdminParam();
+            checkResetTokenParam();
+        });
+
+        function validateOrgSignupForm() {
+            let ok = true;
+            const orgName = (document.getElementById('orgName').value || '').trim();
+            const email = (document.getElementById('orgAdminEmail').value || '').trim();
+            const password = document.getElementById('orgAdminPassword').value || '';
+            const confirmPassword = document.getElementById('orgConfirmPassword').value || '';
+
+            const orgRegex = /^[a-zA-Z0-9 _-]{2,100}$/;
+            if (!orgRegex.test(orgName)) {
+                showValidationError('orgNameHelp', 'Organization name must be 2-100 valid characters');
+                ok = false;
+            } else hideValidationError('orgNameHelp');
+
+            const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+            if (!emailRegex.test(email)) {
+                showValidationError('orgAdminEmailHelp', 'Please enter a valid email address');
+                ok = false;
+            } else hideValidationError('orgAdminEmailHelp');
+
+            const reqs = [/[A-Z]/, /[a-z]/, /[0-9]/, /[!@#$%^&*(),.?":{}|<>]/];
+            if (password.length < 8 || !reqs.every(r => r.test(password))) {
+                showValidationError('orgAdminPasswordHelp', 'Password must include uppercase, lowercase, digit, and special character');
+                ok = false;
+            } else hideValidationError('orgAdminPasswordHelp');
+
+            if (password !== confirmPassword) {
+                showValidationError('orgConfirmPasswordHelp', 'Passwords do not match');
+                ok = false;
+            } else hideValidationError('orgConfirmPasswordHelp');
+
+            const checked = document.querySelector('input[name="plan"]:checked');
+            if (!checked) ok = false;
+
+            return ok;
+        }
+
+        function updatePasswordStrength() {
+            const password = document.getElementById('orgAdminPassword').value || '';
+            let score = 0;
+            if (password.length >= 8) score++;
+            if (/[A-Z]/.test(password)) score++;
+            if (/[a-z]/.test(password)) score++;
+            if (/[0-9]/.test(password)) score++;
+            if (/[!@#$%^&*(),.?":{}|<>]/.test(password)) score++;
+            const bar = document.getElementById('passwordStrengthBar');
+            if (!bar) return;
+            bar.className = 'password-strength-bar ' + (score <= 2 ? 'strength-weak' : score <= 4 ? 'strength-medium' : 'strength-strong');
+        }
+
+        function validatePasswordMatch() {
+            const password = document.getElementById('orgAdminPassword').value || '';
+            const confirmPassword = document.getElementById('orgConfirmPassword').value || '';
+            if (confirmPassword && password !== confirmPassword) {
+                showValidationError('orgConfirmPasswordHelp', 'Passwords do not match');
+            } else {
+                hideValidationError('orgConfirmPasswordHelp');
+            }
+        }
+
+        let orgSignupEmail = null;
+        let orgSignupOtpTimerInterval = null;
+        let orgSignupStep = 'signup'; // 'signup' or 'otp'
+
+        function startOrgSignupOtpTimer(seconds) {
+            if (orgSignupOtpTimerInterval) {
+                clearInterval(orgSignupOtpTimerInterval);
+            }
+            let remaining = seconds;
+            const timerEl = document.getElementById('orgSignupOtpTimer');
+            if (!timerEl) return;
+
+            const updateTimer = () => {
+                const mins = Math.floor(remaining / 60);
+                const secs = remaining % 60;
+                timerEl.textContent = `OTP expires in ${mins}:${secs.toString().padStart(2, '0')}`;
+                if (remaining <= 0) {
+                    clearInterval(orgSignupOtpTimerInterval);
+                    timerEl.textContent = 'OTP expired. Please request a new one.';
+                    timerEl.classList.add('text-red-600');
+                }
+                remaining--;
+            };
+            updateTimer();
+            orgSignupOtpTimerInterval = setInterval(updateTimer, 1000);
+        }
+
+        function handleOrgSignup(event) {
+            event.preventDefault();
+            const btn = document.getElementById('orgSignupButton');
+            const originalText = btn.textContent;
+
+            // Handle OTP verification step
+            if (orgSignupStep === 'otp') {
+                const otpCode = (document.getElementById('orgSignupOtpCode').value || '').trim();
+                if (!otpCode || otpCode.length !== 6) {
+                    alert('Please enter a valid 6-digit OTP code');
+                    return;
+                }
+
+                btn.disabled = true;
+                btn.innerHTML = '<span class="spinner"></span> Verifying OTP...';
+
+                fetch('/api/auth/verify-otp', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        email: orgSignupEmail,
+                        otp_code: otpCode
+                    })
+                })
+                    .then(res => res.json())
+                    .then(data => {
+                        if (data.status === 'success') {
+                            // Store JWT tokens
+                            localStorage.setItem('access_token', data.access_token);
+                            localStorage.setItem('refresh_token', data.refresh_token);
+                            localStorage.setItem('user_data', JSON.stringify({
+                                userType: data.userType,
+                                email: data.email,
+                                name: data.name
+                            }));
+
+                            // Clear pending subscription data
+                            pendingSubscriptionData = null;
+
+                            // Clear OTP timer
+                            if (orgSignupOtpTimerInterval) {
+                                clearInterval(orgSignupOtpTimerInterval);
+                            }
+
+                            // Show success message
+                            alert('Welcome to PROTON! Your 7-day trial has started.');
+
+                            // Redirect based on role
+                            try {
+                                const payload = data.access_token.split('.')[1];
+                                const decoded = JSON.parse(decodeBase64Url(payload));
+                                const userRole = decoded.role;
+                                if (userRole === 'super_admin') {
+                                    window.location.href = '/superadmin';
+                                } else {
+                                    window.location.href = '/dashboard';
+                                }
+                            } catch (error) {
+                                console.error('Error parsing token:', error);
+                                window.location.href = '/dashboard';
+                            }
+                        } else {
+                            alert(data.message || 'OTP verification failed. Please try again.');
+                            btn.disabled = false;
+                            btn.textContent = originalText;
+                        }
+                    })
+                    .catch(err => {
+                        console.error('Error:', err);
+                        alert('An error occurred during OTP verification. Please try again.');
+                        btn.disabled = false;
+                        btn.textContent = originalText;
+                    });
+                return;
+            }
+
+            // Handle initial signup step
+            if (!validateOrgSignupForm()) return;
+
+            const formData = {
+                org_name: document.getElementById('orgName').value.trim(),
+                admin_email: document.getElementById('orgAdminEmail').value.trim(),
+                admin_password: document.getElementById('orgAdminPassword').value,
+                plan_type: document.querySelector('input[name="plan"]:checked').value
+            };
+
+            btn.disabled = true;
+            btn.innerHTML = '<span class="spinner"></span> Creating Organization...';
+
+            fetch('/api/org/signup', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(formData)
+            })
+                .then(res => res.json())
+                .then(data => {
+                    if (data.status === 'otp_sent') {
+                        // Hide signup fields and show OTP section
+                        orgSignupEmail = data.email || formData.admin_email;
+                        orgSignupStep = 'otp';
+
+                        // Hide signup form fields
+                        const form = event.target;
+                        const signupFields = form.querySelectorAll('input[type="text"], input[type="email"], input[type="password"], input[type="radio"]');
+                        signupFields.forEach(field => {
+                            field.closest('div')?.classList.add('hidden');
+                        });
+                        form.querySelector('.grid')?.classList.add('hidden');
+                        const planSection = form.querySelector('h3')?.closest('div');
+                        if (planSection) planSection.classList.add('hidden');
+
+                        // Show OTP section
+                        const otpSection = document.getElementById('orgSignupOtpSection');
+                        if (otpSection) {
+                            otpSection.classList.remove('hidden');
+                        }
+                        const otpEmailDisplay = document.getElementById('orgSignupOtpEmailDisplay');
+                        if (otpEmailDisplay) {
+                            otpEmailDisplay.textContent = orgSignupEmail;
+                        }
+
+                        // Start OTP timer
+                        startOrgSignupOtpTimer((data.expires_in_minutes || 10) * 60);
+
+                        // Focus OTP input
+                        const otpInput = document.getElementById('orgSignupOtpCode');
+                        if (otpInput) {
+                            otpInput.value = '';
+                            otpInput.focus();
+                        }
+
+                        // Update button
+                        btn.disabled = false;
+                        btn.textContent = 'Verify OTP';
+                        btn.innerHTML = 'Verify OTP';
+                    } else if (data.status === 'success') {
+                        // Legacy support: if backend still returns success with tokens
+                        localStorage.setItem('access_token', data.access_token);
+                        localStorage.setItem('refresh_token', data.refresh_token);
+                        localStorage.setItem('user_data', JSON.stringify({
+                            userType: data.userType,
+                            email: data.email,
+                            name: data.name
+                        }));
+                        pendingSubscriptionData = null;
+                        alert('Welcome to PROTON! Your 7-day trial has started.');
+                        window.location.href = '/dashboard';
+                    } else {
+                        alert(data.message || 'Organization signup failed');
+                        btn.disabled = false;
+                        btn.textContent = originalText;
+                    }
+                })
+                .catch(err => {
+                    console.error('Error:', err);
+                    alert('An error occurred during signup. Please try again.');
+                    btn.disabled = false;
+                    btn.textContent = originalText;
+                });
+        }
+
+        function showPaymentOptionModal(planType) {
+            const planNames = { 'basic': 'Basic Plan', 'si_plus': 'Plus Plan', 'pro': 'Pro Plan' };
+            document.getElementById('selectedPlanName').textContent = planNames[planType] || planType;
+            document.getElementById('selectedPlanPrice').textContent = planPrices[planType] || 'Contact sales';
+            document.getElementById('paymentOptionModal').classList.remove('hidden');
+            hideSignupModal();
+        }
+
+        function hidePaymentOptionModal() {
+            document.getElementById('paymentOptionModal').classList.add('hidden');
+        }
+
+        function skipPayment() {
+            hidePaymentOptionModal();
+            alert('You can upgrade to a paid plan anytime from your dashboard.');
+            showLoginModal();
+        }
+
+        function initiatePayment(event, btnEl) {
+            if (!RAZORPAY_ENABLED) {
+                alert('Payment gateway not configured. Please contact support.');
+                return;
+            }
+            if (!pendingSubscriptionData) {
+                alert('No pending subscription found. Please sign up first.');
+                return;
+            }
+            if (isProcessingPayment) {
+                return;
+            }
+            isProcessingPayment = true;
+            const btn = btnEl || (event && event.target);
+            if (btn) {
+                btn.disabled = true;
+                btn.innerHTML = '<span class="spinner"></span> Processing...';
+            }
+            fetch('/api/razorpay/subscription/create', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    plan_type: pendingSubscriptionData.plan_type,
+                    user_count: 1,
+                    billing_cycle: 'monthly'
+                })
+            })
+                .then(res => res.json())
+                .then(data => {
+                    if (data.status === 'success') {
+                        openRazorpayCheckout(data);
+                    } else {
+                        alert(data.message || 'Failed to create subscription');
+                        isProcessingPayment = false;
+                        if (btn) { btn.disabled = false; btn.textContent = 'Upgrade Now'; }
+                    }
+                })
+                .catch(err => {
+                    console.error('Error:', err);
+                    alert('An error occurred. Please try again.');
+                    isProcessingPayment = false;
+                    if (btn) { btn.disabled = false; btn.textContent = 'Upgrade Now'; }
+                });
+        }
+
+        function openRazorpayCheckout(subscriptionData) {
+            const options = {
+                key: RAZORPAY_KEY_ID,
+                subscription_id: subscriptionData.subscription_id,
+                name: 'PROTON',
+                description: subscriptionData.description || 'Subscription Payment',
+                image: '/static/logo.png',
+                prefill: {
+                    email: (subscriptionData.prefill && subscriptionData.prefill.email) || (pendingSubscriptionData && pendingSubscriptionData.admin_email) || '',
+                    contact: (subscriptionData.prefill && subscriptionData.prefill.contact) || ''
+                },
+                theme: { color: '#8b5cf6' },
+                modal: {
+                    ondismiss: function () {
+                        isProcessingPayment = false;
+                        const btn = document.querySelector('#paymentOptionModal button');
+                        if (btn) {
+                            btn.disabled = false;
+                            btn.textContent = 'Upgrade Now';
+                        }
+                    }
+                },
+                handler: function (response) {
+                    verifyPayment(response);
+                }
+            };
+            const rz = new Razorpay(options);
+            rz.on('payment.failed', function (response) {
+                console.error('Payment failed:', response.error);
+                alert((response.error && response.error.description) || 'Payment failed');
+                isProcessingPayment = false;
+            });
+            rz.open();
+        }
+
+        function verifyPayment(razorpayResponse) {
+            hidePaymentOptionModal();
+            const loadingDiv = document.createElement('div');
+            loadingDiv.id = 'paymentVerificationLoading';
+            loadingDiv.className = 'fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50';
+            loadingDiv.innerHTML = '\n        <div class="bg-white rounded-lg p-8 text-center">\n            <div class="spinner mb-4"></div>\n            <p class="text-slate-700 font-medium">Verifying payment...</p>\n            <p class="text-slate-500 text-sm mt-2">Please wait, do not close this window</p>\n        </div>\n    ';
+            document.body.appendChild(loadingDiv);
+            fetch('/api/razorpay/subscription/verify', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    razorpay_subscription_id: razorpayResponse.razorpay_subscription_id,
+                    razorpay_payment_id: razorpayResponse.razorpay_payment_id,
+                    razorpay_signature: razorpayResponse.razorpay_signature
+                })
+            })
+                .then(res => res.json())
+                .then(data => {
+                    document.body.removeChild(loadingDiv);
+                    if (data.status === 'success') {
+                        showPaymentSuccessModal();
+                    } else {
+                        alert(data.message || 'Payment verification failed. Please contact support.');
+                    }
+                })
+                .catch(err => {
+                    console.error('Verification error:', err);
+                    document.body.removeChild(loadingDiv);
+                    alert('An error occurred during verification. Please contact support with your payment details.');
+                })
+                .finally(() => {
+                    isProcessingPayment = false;
+                    pendingSubscriptionData = null;
+                });
+        }
+
+        function showPaymentSuccessModal() {
+            document.getElementById('paymentSuccessModal').classList.remove('hidden');
+        }
+        function hidePaymentSuccessModal() {
+            document.getElementById('paymentSuccessModal').classList.add('hidden');
+        }
+        function redirectToLogin() {
+            hidePaymentSuccessModal();
+            showLoginModal();
+        }
+
+        // SuperAdmin Signup Functions
+        function showSuperAdminSignupModal() {
+            document.getElementById('superadminSignupModal').classList.remove('hidden');
+            document.getElementById('loginModal').classList.add('hidden');
+            const form = document.getElementById('superadminSignupForm');
+            if (form) form.reset();
+            clearSuperAdminValidation();
+            document.getElementById('superadminEmail').focus();
+        }
+
+        function hideSuperAdminSignupModal() {
+            document.getElementById('superadminSignupModal').classList.add('hidden');
+            clearSuperAdminValidation();
+            // Clear secret key field for security
+            const secretKeyField = document.getElementById('superadminSecretKey');
+            if (secretKeyField) secretKeyField.value = '';
+        }
+
+        function clearSuperAdminValidation() {
+            ['superadminEmailHelp', 'superadminPasswordHelp', 'superadminConfirmPasswordHelp', 'superadminSecretKeyHelp'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) { el.textContent = ''; el.style.display = 'none'; }
+            });
+            const bar = document.getElementById('superadminPasswordStrengthBar');
+            if (bar) { bar.className = 'password-strength-bar strength-weak'; }
+        }
+
+        function validateSuperAdminSignupForm() {
+            let ok = true;
+            const email = (document.getElementById('superadminEmail').value || '').trim();
+            const password = document.getElementById('superadminPassword').value || '';
+            const confirmPassword = document.getElementById('superadminConfirmPassword').value || '';
+            const secretKey = (document.getElementById('superadminSecretKey').value || '').trim();
+
+            const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+            if (!emailRegex.test(email)) {
+                showValidationError('superadminEmailHelp', 'Please enter a valid email address');
+                ok = false;
+            } else hideValidationError('superadminEmailHelp');
+
+            const reqs = [/[A-Z]/, /[a-z]/, /[0-9]/, /[!@#$%^&*(),.?":{}|<>]/];
+            if (password.length < 8 || !reqs.every(r => r.test(password))) {
+                showValidationError('superadminPasswordHelp', 'Password must include uppercase, lowercase, digit, and special character');
+                ok = false;
+            } else hideValidationError('superadminPasswordHelp');
+
+            if (password !== confirmPassword) {
+                showValidationError('superadminConfirmPasswordHelp', 'Passwords do not match');
+                ok = false;
+            } else hideValidationError('superadminConfirmPasswordHelp');
+
+            if (secretKey.length < 8) {
+                showValidationError('superadminSecretKeyHelp', 'Secret key is required');
+                ok = false;
+            } else hideValidationError('superadminSecretKeyHelp');
+
+            return ok;
+        }
+
+        function updateSuperAdminPasswordStrength() {
+            const password = document.getElementById('superadminPassword').value || '';
+            let score = 0;
+            if (password.length >= 8) score++;
+            if (/[A-Z]/.test(password)) score++;
+            if (/[a-z]/.test(password)) score++;
+            if (/[0-9]/.test(password)) score++;
+            if (/[!@#$%^&*(),.?":{}|<>]/.test(password)) score++;
+            const bar = document.getElementById('superadminPasswordStrengthBar');
+            if (!bar) return;
+            bar.className = 'password-strength-bar ' + (score <= 2 ? 'strength-weak' : score <= 4 ? 'strength-medium' : 'strength-strong');
+        }
+
+        function validateSuperAdminPasswordMatch() {
+            const password = document.getElementById('superadminPassword').value || '';
+            const confirmPassword = document.getElementById('superadminConfirmPassword').value || '';
+            if (confirmPassword && password !== confirmPassword) {
+                showValidationError('superadminConfirmPasswordHelp', 'Passwords do not match');
+            } else {
+                hideValidationError('superadminConfirmPasswordHelp');
+            }
+        }
+
+        function handleSuperAdminSignup(event) {
+            event.preventDefault();
+            if (!validateSuperAdminSignupForm()) return;
+
+            const formData = {
+                email: document.getElementById('superadminEmail').value.trim(),
+                password: document.getElementById('superadminPassword').value,
+                secret_key: document.getElementById('superadminSecretKey').value.trim()
+            };
+
+            const btn = document.getElementById('superadminSignupButton');
+            btn.disabled = true;
+            const originalText = btn.textContent;
+            btn.innerHTML = '<span class="spinner"></span> Creating SuperAdmin Account...';
+
+            fetch('/api/superadmin/signup', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(formData)
+            })
+                .then(res => res.json())
+                .then(data => {
+                    if (data.status === 'success') {
+                        alert('SuperAdmin account created successfully! You can now log in.');
+                        hideSuperAdminSignupModal();
+                        showLoginModal();
+                        // Pre-fill email in login form
+                        const emailField = document.getElementById('email');
+                        if (emailField) emailField.value = formData.email;
+                        // Clear secret key from memory
+                        document.getElementById('superadminSecretKey').value = '';
+                    } else {
+                        if (data.message && data.message.includes('secret key')) {
+                            showValidationError('superadminSecretKeyHelp', data.message);
+                        } else {
+                            alert(data.message || 'SuperAdmin signup failed');
+                        }
+                    }
+                })
+                .catch(err => {
+                    console.error('Error:', err);
+                    alert('An error occurred during signup. Please try again.');
+                })
+                .finally(() => {
+                    btn.disabled = false;
+                    btn.textContent = originalText;
+                });
+        }
+
+        function checkSuperAdminParam() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const isSuperAdmin = urlParams.get('superadmin') === 'true';
+            if (isSuperAdmin) {
+                showSuperAdminSignupModal();
+                // Remove parameter from URL for security
+                window.history.replaceState({}, document.title, window.location.pathname);
+            }
+        }
+
+        function showForgotPasswordModal() {
+            const loginModal = document.getElementById('loginModal');
+            if (loginModal) loginModal.classList.add('hidden');
+            hideResetPasswordModal();
+            const modal = document.getElementById('forgotPasswordModal');
+            if (modal) modal.classList.remove('hidden');
+            const form = document.getElementById('forgotPasswordForm');
+            if (form) form.reset();
+            const feedback = document.getElementById('forgotPasswordFeedback');
+            if (feedback) {
+                feedback.textContent = '';
+                feedback.classList.add('hidden');
+                feedback.classList.remove('text-red-600', 'text-green-600');
+            }
+            const emailField = document.getElementById('forgotPasswordEmail');
+            if (emailField) emailField.focus();
+        }
+
+        function hideForgotPasswordModal() {
+            const modal = document.getElementById('forgotPasswordModal');
+            if (modal) modal.classList.add('hidden');
+            const feedback = document.getElementById('forgotPasswordFeedback');
+            if (feedback) {
+                feedback.textContent = '';
+                feedback.classList.add('hidden');
+                feedback.classList.remove('text-red-600', 'text-green-600');
+            }
+            const form = document.getElementById('forgotPasswordForm');
+            if (form) form.reset();
+        }
+
+        function handleForgotPassword(event) {
+            event.preventDefault();
+            const emailField = document.getElementById('forgotPasswordEmail');
+            const email = (emailField && emailField.value || '').trim();
+            const feedback = document.getElementById('forgotPasswordFeedback');
+            const submitBtn = document.getElementById('forgotPasswordSubmit');
+            const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+
+            const setFeedback = (message, variant = 'error') => {
+                if (!feedback) return;
+                feedback.textContent = message;
+                feedback.classList.remove('hidden', 'text-red-600', 'text-green-600');
+                feedback.classList.add(variant === 'success' ? 'text-green-600' : 'text-red-600');
+            };
+
+            if (!emailRegex.test(email)) {
+                setFeedback('Please enter a valid email address.');
+                if (emailField) emailField.focus();
+                return;
+            }
+
+            if (submitBtn) {
+                submitBtn.disabled = true;
+                submitBtn.dataset.originalText = submitBtn.innerHTML;
+                submitBtn.innerHTML = '<span class="spinner"></span> Sending...';
+            }
+
+            fetch('/api/auth/forgot-password', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email })
+            })
+                .then(async response => {
+                    let payload = {};
+                    try { payload = await response.json(); } catch (err) { /* no-op */ }
+                    if (!response.ok) {
+                        const error = new Error(payload.message || 'Failed to send reset link.');
+                        error.payload = payload;
+                        throw error;
+                    }
+                    return payload;
+                })
+                .then(data => {
+                    resetPrefillEmail = email;
+                    setFeedback(data.message || 'If an account exists with this email, you will receive a password reset link shortly.', 'success');
+                })
+                .catch(error => {
+                    const message = (error && error.payload && error.payload.message) || error.message || 'Unable to send password reset email. Please try again later.';
+                    setFeedback(message);
+                })
+                .finally(() => {
+                    if (submitBtn) {
+                        submitBtn.disabled = false;
+                        submitBtn.innerHTML = submitBtn.dataset.originalText || 'Send Reset Link';
+                        delete submitBtn.dataset.originalText;
+                    }
+                });
+        }
+
+        function showResetPasswordModal(token) {
+            hideForgotPasswordModal();
+            const loginModal = document.getElementById('loginModal');
+            if (loginModal) loginModal.classList.add('hidden');
+            const modal = document.getElementById('resetPasswordModal');
+            if (modal) modal.classList.remove('hidden');
+            const form = document.getElementById('resetPasswordForm');
+            if (form) form.reset();
+            const tokenField = document.getElementById('resetToken');
+            if (tokenField) tokenField.value = token || '';
+            const feedback = document.getElementById('resetPasswordFeedback');
+            if (feedback) {
+                feedback.textContent = '';
+                feedback.classList.add('hidden');
+                feedback.classList.remove('text-red-600', 'text-green-600');
+            }
+            const matchHelp = document.getElementById('resetPasswordMatchHelp');
+            if (matchHelp) {
+                matchHelp.textContent = '';
+                matchHelp.classList.add('hidden');
+            }
+            updateResetPasswordStrength();
+            const passwordField = document.getElementById('newPassword');
+            if (passwordField) passwordField.focus();
+        }
+
+        function hideResetPasswordModal() {
+            const modal = document.getElementById('resetPasswordModal');
+            if (modal) modal.classList.add('hidden');
+            const form = document.getElementById('resetPasswordForm');
+            if (form) form.reset();
+            const tokenField = document.getElementById('resetToken');
+            if (tokenField) tokenField.value = '';
+            const feedback = document.getElementById('resetPasswordFeedback');
+            if (feedback) {
+                feedback.textContent = '';
+                feedback.classList.add('hidden');
+                feedback.classList.remove('text-red-600', 'text-green-600');
+            }
+            const matchHelp = document.getElementById('resetPasswordMatchHelp');
+            if (matchHelp) {
+                matchHelp.textContent = '';
+                matchHelp.classList.add('hidden');
+            }
+        }
+
+        function updateResetPasswordStrength() {
+            const password = document.getElementById('newPassword') ? (document.getElementById('newPassword').value || '') : '';
+            let score = 0;
+            if (password.length >= 8) score++;
+            if (/[A-Z]/.test(password)) score++;
+            if (/[a-z]/.test(password)) score++;
+            if (/[0-9]/.test(password)) score++;
+            if (/[!@#$%^&*(),.?":{}|<>]/.test(password)) score++;
+            const bar = document.getElementById('resetPasswordStrengthBar');
+            if (!bar) return;
+            bar.className = 'password-strength-bar ' + (score <= 2 ? 'strength-weak' : score <= 4 ? 'strength-medium' : 'strength-strong');
+        }
+
+        function validateResetPasswordMatch() {
+            const password = document.getElementById('newPassword') ? (document.getElementById('newPassword').value || '') : '';
+            const confirmPassword = document.getElementById('confirmNewPassword') ? (document.getElementById('confirmNewPassword').value || '') : '';
+            const help = document.getElementById('resetPasswordMatchHelp');
+            if (!help) return;
+            if (confirmPassword && password !== confirmPassword) {
+                help.textContent = 'Passwords do not match';
+                help.classList.remove('hidden');
+            } else {
+                help.textContent = '';
+                help.classList.add('hidden');
+            }
+        }
+
+        function handleResetPassword(event) {
+            event.preventDefault();
+            const tokenField = document.getElementById('resetToken');
+            const newPasswordField = document.getElementById('newPassword');
+            const confirmPasswordField = document.getElementById('confirmNewPassword');
+            const feedback = document.getElementById('resetPasswordFeedback');
+            const submitBtn = document.getElementById('resetPasswordSubmit');
+            const matchHelp = document.getElementById('resetPasswordMatchHelp');
+
+            const token = (tokenField && tokenField.value || '').trim();
+            const newPassword = newPasswordField ? newPasswordField.value : '';
+            const confirmPassword = confirmPasswordField ? confirmPasswordField.value : '';
+
+            const setFeedback = (message, variant = 'error') => {
+                if (!feedback) return;
+                feedback.textContent = message;
+                feedback.classList.remove('hidden', 'text-red-600', 'text-green-600');
+                feedback.classList.add(variant === 'success' ? 'text-green-600' : 'text-red-600');
+            };
+
+            if (!token) {
+                setFeedback('Reset token missing or invalid.');
+                return;
+            }
+
+            const requirements = [/[A-Z]/, /[a-z]/, /[0-9]/, /[!@#$%^&*(),.?":{}|<>]/];
+            if (newPassword.length < 8 || !requirements.every(regex => regex.test(newPassword))) {
+                setFeedback('Password must be at least 8 characters and include uppercase, lowercase, number, and special character.');
+                return;
+            }
+
+            if (newPassword !== confirmPassword) {
+                if (matchHelp) {
+                    matchHelp.textContent = 'Passwords do not match';
+                    matchHelp.classList.remove('hidden');
+                }
+                setFeedback('Passwords do not match.');
+                return;
+            }
+
+            if (submitBtn) {
+                submitBtn.disabled = true;
+                submitBtn.dataset.originalText = submitBtn.innerHTML;
+                submitBtn.innerHTML = '<span class="spinner"></span> Resetting...';
+            }
+
+            fetch('/api/auth/reset-password', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ reset_token: token, new_password: newPassword })
+            })
+                .then(async response => {
+                    let payload = {};
+                    try { payload = await response.json(); } catch (err) { /* ignore */ }
+                    if (!response.ok) {
+                        const error = new Error(payload.message || 'Failed to reset password.');
+                        error.payload = payload;
+                        throw error;
+                    }
+                    return payload;
+                })
+                .then(data => {
+                    setFeedback(data.message || 'Password reset successfully. You can now log in with your new password.', 'success');
+                    setTimeout(() => {
+                        hideResetPasswordModal();
+                        showLoginModal();
+                        if (resetPrefillEmail) {
+                            const loginEmail = document.getElementById('email');
+                            if (loginEmail) loginEmail.value = resetPrefillEmail;
+                        }
+                        resetPrefillEmail = null;
+                    }, 2000);
+                })
+                .catch(error => {
+                    const message = (error && error.payload && error.payload.message) || error.message || 'Failed to reset password. Please try again.';
+                    setFeedback(message);
+                })
+                .finally(() => {
+                    if (submitBtn) {
+                        submitBtn.disabled = false;
+                        submitBtn.innerHTML = submitBtn.dataset.originalText || 'Reset Password';
+                        delete submitBtn.dataset.originalText;
+                    }
+                });
+        }
+
+        function checkResetTokenParam() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const token = urlParams.get('reset_token');
+            if (token) {
+                showResetPasswordModal(token);
+                window.history.replaceState({}, document.title, window.location.pathname);
+            }
+        }
+
+        // Development mode helpers
+        const DEV_MODE = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+        if (DEV_MODE) {
+            console.log('Development mode enabled');
+            console.log('Razorpay enabled:', RAZORPAY_ENABLED);
+            console.log('Razorpay key:', RAZORPAY_KEY_ID);
+            window.testPayment = function () {
+                if (!RAZORPAY_ENABLED) { console.error('Razorpay not configured'); return; }
+                pendingSubscriptionData = { org_id: 1, plan_type: 'si_plus', admin_email: 'test@example.com' };
+                initiatePayment();
+            };
+            window.showSuperAdminSignup = function () {
+                showSuperAdminSignupModal();
+            };
+            console.log('Test payment function available: window.testPayment()');
+            console.log('SuperAdmin signup available: window.showSuperAdminSignup() or visit /?superadmin=true');
+        }
+
+        function setLoginType(type) {
+            currentLoginType = type;
+            clearLoginFeedback();
+            const adminTab = document.getElementById('adminTab');
+            const clientTab = document.getElementById('clientTab');
+            const loginButton = document.getElementById('loginButton');
+            const adminFields = document.getElementById('adminFields');
+            const clientFields = document.getElementById('clientFields');
+            const forgotPasswordLink = document.getElementById('forgotPasswordLink');
+
+            if (type === 'admin') {
+                if (currentLoginStep !== 'password') {
+                    resetLoginForm();
+                }
+                adminTab.className = 'flex-1 py-3 text-center font-semibold text-sm cursor-pointer transition-colors rounded-md bg-sky-600 text-white';
+                clientTab.className = 'flex-1 py-3 text-center font-semibold text-sm cursor-pointer transition-colors rounded-md text-slate-500 hover:text-slate-700';
+                loginButton.textContent = currentLoginStep === 'otp' ? 'Verify OTP' : 'Login as Admin';
+                loginButton.className = 'w-full mt-6 py-3 px-4 font-semibold text-white rounded-lg transition-colors duration-300 bg-sky-600 hover:bg-sky-700 focus:outline-none focus:ring-2 focus:ring-offset-2';
+
+                // Show admin fields, hide client fields
+                adminFields.classList.remove('hidden');
+                clientFields.classList.add('hidden');
+                if (forgotPasswordLink) forgotPasswordLink.classList.remove('hidden');
+
+                // Set required attributes
+                document.getElementById('email').required = true;
+                document.getElementById('password').required = true;
+                document.getElementById('accessCode').required = false;
+            } else {
+                currentLoginStep = 'password';
+                otpEmail = null;
+                clearInterval(otpTimerInterval);
+                const otpSection = document.getElementById('otpSection');
+                if (otpSection) otpSection.classList.add('hidden');
+                clientTab.className = 'flex-1 py-3 text-center font-semibold text-sm cursor-pointer transition-colors rounded-md bg-teal-600 text-white';
+                adminTab.className = 'flex-1 py-3 text-center font-semibold text-sm cursor-pointer transition-colors rounded-md text-slate-500 hover:text-slate-700';
+                loginButton.textContent = 'Login as Client';
+                loginButton.className = 'w-full mt-6 py-3 px-4 font-semibold text-white rounded-lg transition-colors duration-300 bg-teal-600 hover:bg-teal-700 focus:outline-none focus:ring-2 focus:ring-offset-2';
+
+                // Show client fields, hide admin fields
+                adminFields.classList.add('hidden');
+                clientFields.classList.remove('hidden');
+                if (forgotPasswordLink) forgotPasswordLink.classList.add('hidden');
+
+                // Set required attributes
+                document.getElementById('email').required = false;
+                document.getElementById('password').required = false;
+                document.getElementById('accessCode').required = true;
+            }
+        }
+
+        function handleLogin(event) {
+            event.preventDefault();
+            clearLoginFeedback();
+            const formData = new FormData(event.target);
+            const loginButton = document.getElementById('loginButton');
+            const originalButtonText = loginButton.textContent;
+
+            loginButton.disabled = true;
+            loginButton.classList.add('opacity-75', 'cursor-not-allowed');
+
+            let endpoint = '/api/login';
+            let loginData;
+            if (currentLoginType === 'admin') {
+                if (currentLoginStep === 'otp') {
+                    if (!otpEmail) {
+                        showLoginFeedback('Session expired. Please login again.');
+                        resetLoginForm();
+                        return;
+                    }
+                    const otpValue = (document.getElementById('otpCode').value || '').trim();
+                    if (!otpValue) {
+                        showLoginFeedback('Please enter the OTP sent to your email.');
+                        loginButton.disabled = false;
+                        loginButton.textContent = 'Verify OTP';
+                        loginButton.classList.remove('opacity-75', 'cursor-not-allowed');
+                        return;
+                    }
+                    loginData = { email: otpEmail, otp_code: otpValue };
+                    endpoint = '/api/auth/verify-otp';
+                    loginButton.textContent = 'Verifying...';
+                } else {
+                    loginData = {
+                        email: (formData.get('email') || '').trim(),
+                        password: formData.get('password'),
+                        type: currentLoginType
+                    };
+                    loginButton.textContent = 'Logging in...';
+                }
+            } else {
+                loginData = {
+                    access_code: formData.get('accessCode'),
+                    type: currentLoginType
+                };
+                loginButton.textContent = 'Logging in...';
+            }
+
+            fetch(endpoint, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(loginData)
+            })
+                .then(async (response) => {
+                    let payload = {};
+                    try {
+                        payload = await response.json();
+                    } catch (err) {
+                        console.error('Failed to parse login response JSON', err);
+                    }
+                    if (!response.ok && response.status >= 500) {
+                        const message = payload.message || `Network error: ${response.status} ${response.statusText}`;
+                        throw new Error(message);
+                    }
+                    return { statusCode: response.status, data: payload };
+                })
+                .then(({ statusCode, data }) => {
+                    if (currentLoginType === 'admin' && data.status === 'otp_sent') {
+                        otpEmail = data.email || loginData.email;
+                        const adminFieldsContainer = document.getElementById('adminFields');
+                        const emailField = adminFieldsContainer.querySelector('div:nth-child(1)');
+                        const passwordField = adminFieldsContainer.querySelector('div:nth-child(2)');
+                        if (emailField) emailField.classList.add('hidden');
+                        if (passwordField) passwordField.classList.add('hidden');
+                        const otpSection = document.getElementById('otpSection');
+                        if (otpSection) otpSection.classList.remove('hidden');
+                        const otpDisplay = document.getElementById('otpEmailDisplay');
+                        if (otpDisplay) otpDisplay.textContent = otpEmail || '';
+                        startOTPTimer((data.expires_in_minutes || 10) * 60);
+                        const otpInput = document.getElementById('otpCode');
+                        if (otpInput) {
+                            otpInput.value = '';
+                            otpInput.focus();
+                        }
+                        loginButton.disabled = false;
+                        loginButton.textContent = 'Verify OTP';
+                        loginButton.classList.remove('opacity-75', 'cursor-not-allowed');
+                        currentLoginStep = 'otp';
+                        showLoginFeedback(`OTP sent to ${otpEmail}. Enter the 6-digit code to continue.`, 'info');
+                        return;
+                    }
+
+                    if (data.status === 'success') {
+                        if (currentLoginType === 'admin' && currentLoginStep === 'otp') {
+                            currentLoginStep = 'password';
+                            otpEmail = null;
+                            clearInterval(otpTimerInterval);
+                        }
+                        if (!data.access_token || !data.refresh_token) {
+                            throw new Error('Invalid response: Missing authentication tokens');
+                        }
+
+                        localStorage.setItem('access_token', data.access_token);
+                        localStorage.setItem('refresh_token', data.refresh_token);
+                        localStorage.setItem('user_data', JSON.stringify({
+                            userType: data.userType,
+                            email: data.email,
+                            name: data.name,
+                            project: data.project
+                        }));
+                        localStorage.removeItem('aiProjectControlTowerAuth_v2');
+
+                        try {
+                            const accessToken = data.access_token;
+                            if (!accessToken || accessToken.split('.').length !== 3) {
+                                throw new Error('Invalid token format');
+                            }
+                            const payload = accessToken.split('.')[1];
+                            const decodedPayload = JSON.parse(decodeBase64Url(payload));
+                            const userRole = decodedPayload.role;
+                            console.log('Login successful, redirecting based on role:', userRole);
+                            clearLoginFeedback();
+                            if (userRole === 'super_admin') {
+                                window.location.href = '/superadmin';
+                            } else {
+                                window.location.href = '/dashboard';
+                            }
+                        } catch (error) {
+                            console.error('Error parsing JWT token:', error);
+                            localStorage.removeItem('access_token');
+                            localStorage.removeItem('refresh_token');
+                            localStorage.removeItem('user_data');
+                            const message = 'Login failed: Invalid authentication token. Please try again.';
+                            showLoginFeedback(message);
+                            resetLoginForm();
+                        }
+                        return;
+                    }
+
+                    const errorMessage = data.message || 'Login failed. Please check your credentials and try again.';
+                    const fatalError = shouldResetAfterError(statusCode, errorMessage);
+                    console.warn('Login failed:', errorMessage);
+
+                    if (fatalError) {
+                        resetLoginForm();
+                        showLoginFeedback(errorMessage);
+                        return;
+                    }
+
+                    loginButton.disabled = false;
+                    loginButton.textContent = currentLoginStep === 'otp' ? 'Verify OTP' : originalButtonText;
+                    loginButton.classList.remove('opacity-75', 'cursor-not-allowed');
+                    showLoginFeedback(errorMessage);
+                })
+                .catch(error => {
+                    console.error('Login error:', error);
+                    const message = error.message && error.message.includes('Network error')
+                        ? 'Network error: Unable to connect to server. Please check your connection and try again.'
+                        : (error.message && error.message.includes('Failed to fetch')
+                            ? 'Connection error: Unable to reach the server. Please check your internet connection.'
+                            : (error.message || 'An error occurred during login. Please try again.'));
+                    showLoginFeedback(message);
+                    resetLoginForm();
+                });
+        }
+
+        function startOTPTimer(seconds) {
+            clearInterval(otpTimerInterval);
+            let remaining = seconds;
+            const timerEl = document.getElementById('otpTimer');
+            const updateTimer = () => {
+                if (!timerEl) return;
+                const mins = Math.floor(remaining / 60);
+                const secs = remaining % 60;
+                timerEl.textContent = `${mins}:${secs.toString().padStart(2, '0')}`;
+                if (remaining <= 0) {
+                    clearInterval(otpTimerInterval);
+                    timerEl.textContent = 'Expired';
+                    timerEl.classList.add('text-red-600');
+                }
+                remaining--;
+            };
+            if (timerEl) {
+                timerEl.classList.remove('text-red-600');
+            }
+            updateTimer();
+            otpTimerInterval = setInterval(updateTimer, 1000);
+        }
+
+        function resendOTP() {
+            if (!otpEmail) {
+                showLoginFeedback('Session expired. Please login again.');
+                resetLoginForm();
+                return;
+            }
+            const passwordValue = document.getElementById('password').value;
+            if (!passwordValue) {
+                showLoginFeedback('Password is required to resend the OTP.');
+                resetLoginForm();
+                return;
+            }
+            const resendBtn = document.getElementById('resendOtpBtn');
+            if (!resendBtn) return;
+            resendBtn.disabled = true;
+            resendBtn.textContent = 'Sending...';
+
+            fetch('/api/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    email: otpEmail,
+                    password: passwordValue,
+                    type: 'admin'
+                })
+            })
+                .then(async (response) => {
+                    let payload = {};
+                    try {
+                        payload = await response.json();
+                    } catch (err) {
+                        console.error('Failed to parse resend OTP response JSON', err);
+                    }
+                    if (!response.ok && response.status >= 500) {
+                        const message = payload.message || `Network error: ${response.status} ${response.statusText}`;
+                        throw new Error(message);
+                    }
+                    return { statusCode: response.status, data: payload };
+                })
+                .then(({ statusCode, data }) => {
+                    if (data.status === 'otp_sent') {
+                        showLoginFeedback('New OTP sent! Please check your inbox.', 'info');
+                        startOTPTimer((data.expires_in_minutes || 10) * 60);
+                        const otpInput = document.getElementById('otpCode');
+                        if (otpInput) otpInput.value = '';
+                        return;
+                    }
+                    const errorMessage = data.message || 'Failed to resend OTP.';
+                    const fatalError = shouldResetAfterError(statusCode, errorMessage);
+                    if (fatalError) {
+                        resetLoginForm();
+                        showLoginFeedback(errorMessage);
+                        return;
+                    }
+                    showLoginFeedback(errorMessage);
+                })
+                .catch(err => {
+                    console.error('Resend OTP error:', err);
+                    const message = err.message || 'Failed to resend OTP. Please try again.';
+                    showLoginFeedback(message);
+                    resetLoginForm();
+                })
+                .finally(() => {
+                    resendBtn.disabled = false;
+                    resendBtn.textContent = 'Resend OTP';
+                });
+        }
+
+        function resetLoginForm() {
+            currentLoginStep = 'password';
+            otpEmail = null;
+            clearInterval(otpTimerInterval);
+            const timerEl = document.getElementById('otpTimer');
+            if (timerEl) {
+                timerEl.textContent = '10:00';
+                timerEl.classList.remove('text-red-600');
+            }
+            const otpSection = document.getElementById('otpSection');
+            if (otpSection) otpSection.classList.add('hidden');
+            const adminFieldsContainer = document.getElementById('adminFields');
+            if (adminFieldsContainer) {
+                const emailField = adminFieldsContainer.querySelector('div:nth-child(1)');
+                const passwordField = adminFieldsContainer.querySelector('div:nth-child(2)');
+                if (emailField) emailField.classList.remove('hidden');
+                if (passwordField) passwordField.classList.remove('hidden');
+            }
+            const loginButton = document.getElementById('loginButton');
+            if (loginButton) {
+                loginButton.disabled = false;
+                loginButton.textContent = 'Login as Admin';
+                loginButton.classList.remove('opacity-75', 'cursor-not-allowed');
+            }
+            const otpInput = document.getElementById('otpCode');
+            if (otpInput) otpInput.value = '';
+            const otpEmailDisplay = document.getElementById('otpEmailDisplay');
+            if (otpEmailDisplay) otpEmailDisplay.textContent = '';
+            const form = document.getElementById('loginForm');
+            if (form) form.reset();
+            clearLoginFeedback();
+        }
+
+        function handleSignup(event) {
+            event.preventDefault();
+            const formData = new FormData(event.target);
+            const signupData = {
+                email: formData.get('email'),
+                password: formData.get('password')
+            };
+
+            fetch('/api/signup', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(signupData)
+            })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status === 'success') {
+                        alert('Registration successful! Please wait for admin approval.');
+                        hideSignupModal();
+                    } else {
+                        alert(data.message || 'Signup failed');
+                    }
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    alert('An error occurred during signup');
+                });
+        }
+
+        // Smooth scrolling for navigation links
+        document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+            anchor.addEventListener('click', function (e) {
+                e.preventDefault();
+                document.querySelector(this.getAttribute('href')).scrollIntoView({
+                    behavior: 'smooth'
+                });
+            });
+        });
+
+        // Mobile menu toggle
+        document.getElementById('mobile-menu-button').addEventListener('click', function () {
+            document.getElementById('mobile-menu').classList.toggle('hidden');
+        });
+
+        // Password visibility toggle function
+        function togglePasswordVisibility(inputId) {
+            const input = document.getElementById(inputId);
+            const eyeIcon = document.getElementById(inputId + '-eye');
+
+            if (input.type === 'password') {
+                input.type = 'text';
+                // Change to eye-slash icon (hidden)
+                eyeIcon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.878 9.878L3 3m6.878 6.878L21 21"></path>';
+            } else {
+                input.type = 'password';
+                // Change back to eye icon (visible)
+                eyeIcon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path>';
+            }
+        }
+    </script>
+    <script>
+        // Check if user is already logged in and redirect accordingly
+        // This handles cases where JWT token is in localStorage but not in request headers
+        document.addEventListener('DOMContentLoaded', () => {
+            const accessToken = localStorage.getItem('access_token');
+            
+            if (accessToken) {
+                try {
+                    // Decode JWT token to get user role
+                    const parts = accessToken.split('.');
+                    if (parts.length === 3) {
+                        let payload = parts[1];
+                        // Handle base64url decoding
+                        payload = payload.replace(/-/g, '+').replace(/_/g, '/');
+                        while (payload.length % 4) {
+                            payload += '=';
+                        }
+                        const decoded = JSON.parse(atob(payload));
+                        
+                        // Check if token is expired
+                        if (decoded.exp) {
+                            const expDate = new Date(decoded.exp * 1000);
+                            if (expDate < new Date()) {
+                                // Token expired, clear it and stay on landing page
+                                localStorage.removeItem('access_token');
+                                localStorage.removeItem('refresh_token');
+                                localStorage.removeItem('user_data');
+                                return;
+                            }
+                        }
+                        
+                        // Token is valid, redirect based on role
+                        const userRole = decoded.role;
+                        if (userRole === 'super_admin') {
+                            window.location.href = '/superadmin';
+                            return;
+                        } else if (userRole) {
+                            // Any other logged-in user goes to home
+                            window.location.href = '/dashboard';
+                            return;
+                        }
+                    }
+                } catch (e) {
+                    // Error decoding token, clear invalid tokens
+                    console.error('Error decoding token:', e);
+                    localStorage.removeItem('access_token');
+                    localStorage.removeItem('refresh_token');
+                    localStorage.removeItem('user_data');
+                }
+            }
+            
+            // Scroll Animation Observer
+            const observerOptions = {
+                root: null,
+                rootMargin: '0px',
+                threshold: 0.1
+            };
+
+            const observer = new IntersectionObserver((entries, observer) => {
+                entries.forEach(entry => {
+                    if (entry.isIntersecting) {
+                        entry.target.classList.add('visible');
+                        observer.unobserve(entry.target); // Only animate once
+                    }
+                });
+            }, observerOptions);
+
+            document.querySelectorAll('.fade-up').forEach(el => {
+                observer.observe(el);
+            });
+        });
+
+        // ... existing scripts ...
+    </script>
+</body>
+
+</html>

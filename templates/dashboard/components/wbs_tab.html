@@ -1,0 +1,201 @@
+<script type="text/babel">
+    const WBSTab = ({ tasks, viewType, loggedInUserType, sortBy, onSort, areAllExpanded, onToggleAllExpansion, hasMoreTasks, isLoadingMore, loadMoreTasks, isTrialExpired, onUpdateTask, onEditTask, onAIUpdate, onShowNotes, onShowDetails, onClientComm, onToggleClientDeliverable, onToggleExpansion, onAddTask, onAddSubTask, onDeleteTask, searchTerm, onSearchChange, dateRange, onDateRangeChange, onExport, onImportCSV }) => {
+        const { useState } = React;
+        const [statusFilter, setStatusFilter] = useState('all');
+        const [criticalFilter, setCriticalFilter] = useState(false);
+        
+        // Filter tasks based on status and critical
+        const filteredTasks = React.useMemo(() => {
+            if (!tasks) return [];
+            const filterTasks = (taskList) => {
+                return taskList.map(task => {
+                    const matchesStatus = statusFilter === 'all' || task.status === statusFilter;
+                    const matchesCritical = !criticalFilter || task.isCritical;
+                    const matchesSearch = !searchTerm || 
+                        (task.taskName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+                        (task.wbs || '').toLowerCase().includes(searchTerm.toLowerCase());
+                    const matchesDate = (!dateRange.start || !task.plannedStartDate || task.plannedStartDate >= dateRange.start) &&
+                                      (!dateRange.end || !task.plannedEndDate || task.plannedEndDate <= dateRange.end);
+                    
+                    const selfMatches = matchesStatus && matchesCritical && matchesSearch && matchesDate;
+                    const subtasks = task.subtasks ? filterTasks(task.subtasks) : [];
+                    const hasVisibleSubtasks = subtasks.length > 0;
+                    
+                    if (selfMatches || hasVisibleSubtasks) {
+                        return { ...task, subtasks };
+                    }
+                    return null;
+                }).filter(Boolean);
+            };
+            return filterTasks(tasks);
+        }, [tasks, statusFilter, criticalFilter, searchTerm, dateRange]);
+        
+        return React.createElement("div", { className: "wbs-tab-container space-y-4" },
+            // Filter & Search Panel
+            React.createElement("div", { className: "wbs-filter-panel bg-gradient-to-r from-teal-500 to-blue-600 text-white p-6 rounded-xl shadow-lg" },
+                React.createElement("div", { className: "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4" },
+                    // Search Input
+                    React.createElement("div", { className: "lg:col-span-2" },
+                        React.createElement("label", { className: "block text-sm font-semibold mb-2" }, "Search Tasks"),
+                        React.createElement("div", { className: "relative" },
+                            React.createElement("input", {
+                                type: "text",
+                                placeholder: "Search by name or WBS...",
+                                value: searchTerm || '',
+                                onChange: (e) => onSearchChange(e.target.value),
+                                className: "w-full px-4 py-2 rounded-lg text-gray-800 focus:ring-2 focus:ring-white focus:outline-none"
+                            }),
+                            React.createElement("svg", {
+                                className: "absolute right-3 top-2.5 h-5 w-5 text-gray-400",
+                                fill: "none",
+                                stroke: "currentColor",
+                                viewBox: "0 0 24 24"
+                            }, React.createElement("path", {
+                                strokeLinecap: "round",
+                                strokeLinejoin: "round",
+                                strokeWidth: 2,
+                                d: "M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+                            }))
+                        )
+                    ),
+                    // Date Range Start
+                    React.createElement("div", null,
+                        React.createElement("label", { className: "block text-sm font-semibold mb-2" }, "Start Date"),
+                        React.createElement("input", {
+                            type: "date",
+                            value: dateRange.start || '',
+                            onChange: (e) => onDateRangeChange(e.target.value, dateRange.end),
+                            className: "w-full px-4 py-2 rounded-lg text-gray-800 focus:ring-2 focus:ring-white focus:outline-none"
+                        })
+                    ),
+                    // Date Range End
+                    React.createElement("div", null,
+                        React.createElement("label", { className: "block text-sm font-semibold mb-2" }, "End Date"),
+                        React.createElement("input", {
+                            type: "date",
+                            value: dateRange.end || '',
+                            onChange: (e) => onDateRangeChange(dateRange.start, e.target.value),
+                            className: "w-full px-4 py-2 rounded-lg text-gray-800 focus:ring-2 focus:ring-white focus:outline-none"
+                        })
+                    )
+                ),
+                React.createElement("div", { className: "grid grid-cols-1 md:grid-cols-3 gap-4 mt-4" },
+                    // Status Filter
+                    React.createElement("div", null,
+                        React.createElement("label", { className: "block text-sm font-semibold mb-2" }, "Status"),
+                        React.createElement("select", {
+                            value: statusFilter,
+                            onChange: (e) => setStatusFilter(e.target.value),
+                            className: "w-full px-4 py-2 rounded-lg text-gray-800 focus:ring-2 focus:ring-white focus:outline-none"
+                        },
+                            React.createElement("option", { value: "all" }, "All"),
+                            React.createElement("option", { value: "Not Started" }, "Not Started"),
+                            React.createElement("option", { value: "In Progress" }, "In Progress"),
+                            React.createElement("option", { value: "Completed" }, "Completed"),
+                            React.createElement("option", { value: "Delayed" }, "Delayed")
+                        )
+                    ),
+                    // Critical Filter
+                    React.createElement("div", { className: "flex items-end" },
+                        React.createElement("label", { className: "flex items-center cursor-pointer" },
+                            React.createElement("input", {
+                                type: "checkbox",
+                                checked: criticalFilter,
+                                onChange: (e) => setCriticalFilter(e.target.checked),
+                                className: "h-5 w-5 rounded text-teal-600 focus:ring-2 focus:ring-white mr-2"
+                            }),
+                            React.createElement("span", { className: "text-sm font-semibold" }, "Critical Tasks Only")
+                        )
+                    ),
+                    // Clear Filters
+                    React.createElement("div", { className: "flex items-end" },
+                        React.createElement("button", {
+                            onClick: () => {
+                                setStatusFilter('all');
+                                setCriticalFilter(false);
+                                onSearchChange('');
+                                onDateRangeChange('', '');
+                            },
+                            className: "w-full px-4 py-2 bg-white/20 hover:bg-white/30 rounded-lg text-sm font-semibold transition-colors"
+                        }, "Clear Filters")
+                    )
+                )
+            ),
+            
+            // Action Bar
+            React.createElement("div", { className: "wbs-action-bar flex flex-wrap items-center justify-between gap-4" },
+                React.createElement("div", { className: "flex gap-2" },
+                    loggedInUserType !== 'client' && React.createElement("button", {
+                        onClick: onImportCSV,
+                        disabled: isTrialExpired,
+                        className: `px-4 py-2 bg-gradient-to-r from-sky-500 to-blue-600 text-white rounded-lg font-semibold hover:from-sky-600 hover:to-blue-700 transition-all shadow-md ${isTrialExpired ? 'opacity-50 cursor-not-allowed' : ''}`
+                    }, "Import CSV"),
+                    React.createElement("div", { className: "relative" },
+                        React.createElement("button", {
+                            onClick: () => {
+                                const menu = document.getElementById('export-dropdown');
+                                if (menu) menu.classList.toggle('hidden');
+                            },
+                            className: "px-4 py-2 bg-gradient-to-r from-green-500 to-green-600 text-white rounded-lg font-semibold hover:from-green-600 hover:to-green-700 transition-all shadow-md"
+                        }, "Export ▼"),
+                        React.createElement("div", {
+                            id: "export-dropdown",
+                            className: "hidden absolute top-full mt-2 bg-white rounded-lg shadow-xl z-20 min-w-[150px]"
+                        },
+                            React.createElement("button", {
+                                onClick: () => { onExport('csv'); document.getElementById('export-dropdown').classList.add('hidden'); },
+                                className: "w-full text-left px-4 py-2 hover:bg-gray-100 rounded-t-lg"
+                            }, "Export CSV"),
+                            React.createElement("button", {
+                                onClick: () => { onExport('pdf'); document.getElementById('export-dropdown').classList.add('hidden'); },
+                                className: "w-full text-left px-4 py-2 hover:bg-gray-100"
+                            }, "Export PDF"),
+                            React.createElement("button", {
+                                onClick: () => { onExport('gantt'); document.getElementById('export-dropdown').classList.add('hidden'); },
+                                className: "w-full text-left px-4 py-2 hover:bg-gray-100 rounded-b-lg"
+                            }, "Export Gantt")
+                        )
+                    )
+                ),
+                React.createElement("button", {
+                    onClick: () => onAddTask(null, 'sibling'),
+                    disabled: isTrialExpired,
+                    className: `px-4 py-2 bg-gradient-to-r from-purple-500 to-purple-600 text-white rounded-lg font-semibold hover:from-purple-600 hover:to-purple-700 transition-all shadow-md ${isTrialExpired ? 'opacity-50 cursor-not-allowed' : ''}`
+                }, "Add Task")
+            ),
+            
+            // Enhanced Task Table
+            React.createElement("div", { className: "wbs-table-enhanced overflow-x-auto bg-white shadow-xl rounded-xl" },
+                React.createElement(TaskTable, {
+                    tasks: filteredTasks,
+                    viewType: viewType,
+                    loggedInUserType: loggedInUserType,
+                    sortBy: sortBy,
+                    onSort: onSort,
+                    areAllExpanded: areAllExpanded,
+                    onToggleAllExpansion: onToggleAllExpansion,
+                    hasMoreTasks: hasMoreTasks,
+                    isLoadingMore: isLoadingMore,
+                    loadMoreTasks: loadMoreTasks,
+                    isTrialExpired: isTrialExpired,
+                    onUpdateTask: onUpdateTask,
+                    onEditTask: onEditTask,
+                    onAIUpdate: onAIUpdate,
+                    onShowNotes: onShowNotes,
+                    onShowDetails: onShowDetails,
+                    onClientComm: onClientComm,
+                    onToggleClientDeliverable: onToggleClientDeliverable,
+                    onToggleExpansion: onToggleExpansion,
+                    onAddTask: onAddTask,
+                    onAddSubTask: onAddSubTask,
+                    onDeleteTask: onDeleteTask,
+                    onToggleAllClientDeliverables: (shouldSelectAll) => {
+                        // This would need to be passed from parent
+                        console.log('Toggle all client deliverables:', shouldSelectAll);
+                    }
+                })
+            )
+        );
+    };
+</script>
+

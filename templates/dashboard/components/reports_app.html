@@ -1,0 +1,1072 @@
+<script type="text/babel">
+    // Reports App Component - Integrates chart rendering and export functionality
+    const ReportsApp = () => {
+        const { useState, useEffect, useRef } = React;
+
+        // Authentication state
+        const [loggedInUser, setLoggedInUser] = useState(null);
+        const [isLoading, setIsLoading] = useState(true);
+        const [error, setError] = useState(null);
+
+        // Chart data and filters
+        const [selectedProjects, setSelectedProjects] = useState([]);
+        const [projects, setProjects] = useState([]);
+        const [dateRange, setDateRange] = useState({ start: '', end: '' });
+        const [chartData, setChartData] = useState(null);
+        const [exportFormat, setExportFormat] = useState(null);
+
+        // Chart refs
+        const statusChartRef = useRef(null);
+        const delayChartRef = useRef(null);
+        const progressCurveChartRef = useRef(null);
+        const engineeringDisciplineChartRef = useRef(null);
+        const epcProgressChartRef = useRef(null);
+
+        // JWT Authentication Helper Functions (copied from charts.html lines 232-299, 328-460)
+        function isTokenExpired(token) {
+            if (!token) return true;
+            try {
+                let payload = token.split('.')[1];
+                payload = payload.replace(/-/g, '+').replace(/_/g, '/');
+                while (payload.length % 4) {
+                    payload += '=';
+                }
+                const decoded = JSON.parse(atob(payload));
+                if (decoded.exp) {
+                    const expDate = new Date(decoded.exp * 1000);
+                    return expDate < new Date();
+                }
+                return false;
+            } catch {
+                return true;
+            }
+        }
+
+        function handleSessionTimeout() {
+            localStorage.removeItem('access_token');
+            localStorage.removeItem('refresh_token');
+            localStorage.removeItem('user_data');
+            localStorage.removeItem('aiProjectControlTowerAuth_v2');
+            sessionStorage.removeItem('trial_banner_dismissed');
+            sessionStorage.removeItem('trial_banner_dismissed_at');
+            document.body.innerHTML = `
+                <div class="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-50 to-slate-100">
+                    <div class="text-center p-8 bg-white rounded-2xl shadow-xl border border-slate-200 max-w-md">
+                        <div class="mb-6">
+                            <div class="mx-auto w-16 h-16 bg-gradient-to-br from-amber-400 to-orange-500 rounded-full flex items-center justify-center mb-4">
+                                <svg class="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                                </svg>
+                            </div>
+                            <h2 class="text-2xl font-bold text-slate-800 mb-2">Session Timed Out</h2>
+                            <p class="text-slate-600 mb-4">Your session has expired for security reasons.</p>
+                            <p class="text-sm text-slate-500 mb-6">Redirecting to login...</p>
+                            <div class="flex justify-center">
+                                <div class="animate-spin h-8 w-8 border-4 border-slate-200 border-t-indigo-600 rounded-full"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+            setTimeout(() => { window.location.href = '/'; }, 2000);
+        }
+
+        const refreshAccessToken = async () => {
+            const refreshToken = localStorage.getItem('refresh_token');
+            if (!refreshToken) {
+                handleSessionTimeout();
+                return false;
+            }
+            try {
+                const response = await fetch('/api/refresh', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ refresh_token: refreshToken })
+                });
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data && data.access_token) {
+                        localStorage.setItem('access_token', data.access_token);
+                        return true;
+                    }
+                }
+                handleSessionTimeout();
+                return false;
+            } catch (error) {
+                handleSessionTimeout();
+                return false;
+            }
+        };
+
+        const makeAuthenticatedRequest = async (url, options = {}) => {
+            let accessToken = localStorage.getItem('access_token');
+            if (isTokenExpired(accessToken)) {
+                const refreshSuccess = await refreshAccessToken();
+                if (!refreshSuccess) {
+                    throw new Error('Session expired');
+                }
+                accessToken = localStorage.getItem('access_token');
+                if (!accessToken || isTokenExpired(accessToken)) {
+                    throw new Error('Session expired');
+                }
+            }
+            if (!options.headers) {
+                options.headers = {};
+            }
+            options.headers['Authorization'] = 'Bearer ' + accessToken;
+            let response = await fetch(url, options);
+            if (response.status === 401) {
+                const refreshSuccess = await refreshAccessToken();
+                if (refreshSuccess) {
+                    const newAccessToken = localStorage.getItem('access_token');
+                    if (newAccessToken && !isTokenExpired(newAccessToken)) {
+                        options.headers['Authorization'] = 'Bearer ' + newAccessToken;
+                        response = await fetch(url, options);
+                    } else {
+                        throw new Error('Session expired');
+                    }
+                } else {
+                    throw new Error('Session expired');
+                }
+            }
+            return response;
+        };
+
+        // Extract user info from JWT with refresh support
+        useEffect(() => {
+            const initializeAuth = async () => {
+                const accessToken = localStorage.getItem('access_token');
+                const userData = localStorage.getItem('user_data');
+                if (!accessToken || !userData) {
+                    localStorage.removeItem('aiProjectControlTowerAuth_v2');
+                    window.location.href = '/';
+                    return;
+                }
+
+                let tokenToUse = accessToken;
+
+                // If access token is expired, attempt refresh BEFORE session timeout
+                if (isTokenExpired(tokenToUse)) {
+                    const refreshSuccess = await refreshAccessToken();
+                    if (!refreshSuccess) {
+                        handleSessionTimeout();
+                        return;
+                    }
+                    tokenToUse = localStorage.getItem('access_token');
+                    if (!tokenToUse || isTokenExpired(tokenToUse)) {
+                        handleSessionTimeout();
+                        return;
+                    }
+                }
+
+                try {
+                    const authData = JSON.parse(userData);
+                    // Extract role and org_id from (potentially refreshed) JWT using robust base64url decoding
+                    let payload = tokenToUse.split('.')[1];
+                    payload = payload.replace(/-/g, '+').replace(/_/g, '/');
+                    while (payload.length % 4) {
+                        payload += '=';
+                    }
+                    const decoded = JSON.parse(atob(payload));
+                    authData.role = decoded.role || authData.userType;
+                    authData.org_id = decoded.org_id;
+                    setLoggedInUser(authData);
+                } catch (e) {
+                    handleSessionTimeout();
+                    return;
+                }
+
+                setIsLoading(false);
+            };
+
+            initializeAuth();
+        }, []);
+
+        // Fetch projects
+        useEffect(() => {
+            if (!loggedInUser) return;
+            makeAuthenticatedRequest('/api/projects', { method: 'GET', headers: { 'Content-Type': 'application/json' } })
+                .then(res => res.json())
+                .then(data => {
+                    // Handle error responses (non-array) and ensure projects is always an array
+                    const projectsArray = Array.isArray(data) ? data : [];
+                    if (!Array.isArray(data) && data && data.status === 'error') {
+                        console.error('Projects API error:', data.message);
+                    }
+                    setProjects(projectsArray);
+                    const projectSelector = document.getElementById('project-selector');
+                    if (projectSelector) {
+                        // Clear existing options except the placeholder
+                        projectSelector.innerHTML = '<option value="">Select a Project</option>';
+                        projectsArray.forEach(project => {
+                            const option = document.createElement('option');
+                            option.value = project.name;
+                            option.textContent = project.name;
+                            projectSelector.appendChild(option);
+                        });
+                        // Auto-select first project if available
+                        if (projectsArray.length > 0) {
+                            projectSelector.value = projectsArray[0].name;
+                            setSelectedProjects([projectsArray[0].name]);
+                        }
+                    }
+                })
+                .catch(err => {
+                    console.error('Failed to fetch projects:', err);
+                    setProjects([]);
+                });
+        }, [loggedInUser]);
+
+        // Fetch chart data
+        const fetchChartData = async () => {
+            // Require a project selection
+            if (!selectedProjects.length || selectedProjects.length === 0) {
+                setChartData(null);
+                setError('Please select a project to view reports.');
+                setIsLoading(false);
+                return;
+            }
+
+            // Build query params - project is required
+            const params = new URLSearchParams();
+            params.append('project', selectedProjects[0]);
+            if (dateRange.start) {
+                params.append('start_date', dateRange.start);
+            }
+            if (dateRange.end) {
+                params.append('end_date', dateRange.end);
+            }
+
+            try {
+                setIsLoading(true);
+                setError(null);
+                const response = await makeAuthenticatedRequest(`/api/chart_data?${params.toString()}`, {
+                    method: 'GET',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                const data = await response.json();
+                setChartData(data);
+            } catch (err) {
+                setError(err.message || 'Failed to fetch chart data');
+            } finally {
+                setIsLoading(false);
+            }
+        };
+
+        // Initial data fetch - only when a project is selected
+        useEffect(() => {
+            if (loggedInUser && projects.length > 0 && selectedProjects.length > 0) {
+                fetchChartData();
+            }
+        }, [loggedInUser, projects, selectedProjects]);
+
+        // Chart.js Plugins (copied from charts.html lines 471-573)
+        const customDoughnutLabelsPlugin = {
+            id: 'customDoughnutLabels',
+            afterDraw(chart, args, options) {
+                const { ctx } = chart;
+                const { epcData } = options;
+                if (!epcData) return;
+                const meta = chart.getDatasetMeta(0);
+                if (!meta.data.length) return;
+                const categoryAngles = {};
+                meta.data.forEach((arc, index) => {
+                    const label = chart.data.labels[index];
+                    const mainCategory = label.split(' - ')[0];
+                    if (!categoryAngles[mainCategory]) {
+                        categoryAngles[mainCategory] = { startAngle: arc.startAngle, endAngle: arc.endAngle, weightage: epcData[mainCategory]?.weightage || 0 };
+                    } else {
+                        categoryAngles[mainCategory].endAngle = arc.endAngle;
+                    }
+                });
+                ctx.save();
+                const isMobile = window.innerWidth < 768;
+                const isSmallMobile = window.innerWidth < 480;
+                ctx.font = `600 ${isSmallMobile ? '8' : isMobile ? '9' : '11'}px Inter`;
+                ctx.fillStyle = '#475569';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                const outerRadius = meta.data[0].outerRadius;
+                const labelRadius = outerRadius + (isSmallMobile ? 12 : isMobile ? 15 : 20);
+                for (const categoryName in categoryAngles) {
+                    const category = categoryAngles[categoryName];
+                    const totalAngle = category.endAngle - category.startAngle;
+                    if (category.weightage > 0 && totalAngle > 0.15) {
+                        const midAngle = category.startAngle + totalAngle / 2;
+                        const x = chart.width / 2 + Math.cos(midAngle) * labelRadius;
+                        let y = chart.height / 2 + Math.sin(midAngle) * labelRadius;
+                        if (midAngle > Math.PI * 0.4 && midAngle < Math.PI * 0.6) { y += 5; }
+                        if (midAngle < -Math.PI * 0.4 && midAngle > -Math.PI * 0.6) { y -= 5; }
+                        ctx.fillText(`${categoryName} (${category.weightage}%)`, x, y);
+                    }
+                }
+                ctx.restore();
+            }
+        };
+        Chart.register(customDoughnutLabelsPlugin);
+
+        const barValueLabelsPlugin = {
+            id: 'barValueLabels',
+            afterDatasetsDraw(chart, args, pluginOptions) {
+                const { ctx } = chart;
+                const isMobile = window.innerWidth < 768;
+                const isSmallMobile = window.innerWidth < 480;
+                const isHorizontal = chart.options.indexAxis === 'y';
+                const fontSize = isHorizontal ? (isSmallMobile ? 8 : isMobile ? 9 : 10) : (isSmallMobile ? 10 : isMobile ? 11 : 12);
+                ctx.save();
+                ctx.font = `600 ${fontSize}px Inter`;
+                ctx.fillStyle = pluginOptions?.color || 'rgba(255, 255, 255, 0.9)';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                chart.data.datasets.forEach((dataset, datasetIndex) => {
+                    const meta = chart.getDatasetMeta(datasetIndex);
+                    if (!meta || meta.type !== 'bar') return;
+                    meta.data.forEach((barElement, index) => {
+                        const value = dataset.data[index];
+                        if (value == null) return;
+                        const props = barElement.getProps(['x', 'y', 'base'], true);
+                        const x = props.x;
+                        const y = props.y;
+                        const base = props.base;
+                        const label = `${Number(value).toFixed(0)}%`;
+                        if (isHorizontal) {
+                            const barWidth = Math.abs(x - base);
+                            const textX = base + (x - base) / 2;
+                            if (barWidth > fontSize * 2) {
+                                ctx.fillText(label, textX, y);
+                            }
+                        } else {
+                            const barHeight = Math.abs(y - base);
+                            const textY = y + (base - y) / 2;
+                            if (barHeight > fontSize + 4) {
+                                ctx.fillText(label, x, textY);
+                            }
+                        }
+                    });
+                });
+                ctx.restore();
+            }
+        };
+        Chart.register(barValueLabelsPlugin);
+
+        // Download Button Component (copied from charts.html lines 575-657)
+        const DownloadButton = ({ chartRef, chartTitle }) => {
+            const [showDropdown, setShowDropdown] = useState(false);
+            const downloadChart = (format) => {
+                if (!chartRef.current || !chartRef.current.chart) return;
+                const chart = chartRef.current.chart;
+                const fileName = `${chartTitle.replace(/\s+/g, '_').toLowerCase()}_chart`;
+                if (format === 'png') {
+                    const url = chart.toBase64Image('image/png', 1.0);
+                    const link = document.createElement('a');
+                    link.download = `${fileName}.png`;
+                    link.href = url;
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                } else if (format === 'svg') {
+                    const canvas = chart.canvas;
+                    const svgString = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${canvas.width}" height="${canvas.height}"><foreignObject width="100%" height="100%"><div xmlns="http://www.w3.org/1999/xhtml"><img src="${chart.toBase64Image('image/png', 1.0)}" width="${canvas.width}" height="${canvas.height}"/></div></foreignObject></svg>`;
+                    const blob = new Blob([svgString], { type: 'image/svg+xml' });
+                    const url = URL.createObjectURL(blob);
+                    const link = document.createElement('a');
+                    link.download = `${fileName}.svg`;
+                    link.href = url;
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                    URL.revokeObjectURL(url);
+                }
+                setShowDropdown(false);
+            };
+            return React.createElement('div', { className: 'absolute top-2 right-2 z-10', onMouseEnter: () => setShowDropdown(true), onMouseLeave: () => setShowDropdown(false) },
+                React.createElement('button', { className: 'p-2 bg-white/90 hover:bg-white rounded-lg shadow-md transition-all duration-200 hover:shadow-lg', title: 'Download Chart' },
+                    React.createElement('svg', { className: 'w-5 h-5 text-slate-600', fill: 'none', stroke: 'currentColor', viewBox: '0 0 24 24' },
+                        React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', strokeWidth: 2, d: 'M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z' })
+                    )
+                ),
+                showDropdown && React.createElement('div', { className: 'absolute top-full right-0 mt-1 bg-white rounded-lg shadow-lg border border-slate-200 overflow-hidden min-w-[120px]' },
+                    React.createElement('button', { className: 'w-full px-4 py-2 text-left text-sm text-slate-700 hover:bg-slate-50 transition-colors', onClick: () => downloadChart('png') }, 'Download PNG'),
+                    React.createElement('button', { className: 'w-full px-4 py-2 text-left text-sm text-slate-700 hover:bg-slate-50 transition-colors', onClick: () => downloadChart('svg') }, 'Download SVG')
+                )
+            );
+        };
+
+        // Loading Spinner Component
+        const LoadingSpinner = ({ message }) => {
+            return React.createElement('div', { className: 'text-center py-10 bg-white shadow rounded-lg' },
+                React.createElement('div', { className: 'flex items-center justify-center' },
+                    React.createElement('div', { className: 'animate-spin rounded-full h-12 w-12 border-t-4 border-b-4 border-sky-500' }),
+                    React.createElement('p', { className: 'ml-4 text-lg text-slate-500' }, message || 'Loading...')
+                )
+            );
+        };
+
+        // Chart rendering effect (Improved UI)
+        useEffect(() => {
+            if (isLoading || error || !chartData) return;
+
+            const chartInstances = [];
+            const handleResize = () => {
+                chartInstances.forEach(chart => {
+                    if (chart && typeof chart.resize === 'function') {
+                        chart.resize();
+                    }
+                });
+            };
+            window.addEventListener('resize', handleResize);
+
+            // --- UI Theme Constants ---
+            const fontFamily = "'Inter', sans-serif";
+            const colors = {
+                primary: '#6366f1',   // Indigo 500
+                primaryLight: '#818cf8', // Indigo 400
+                primaryDark: '#4f46e5',  // Indigo 600
+                success: '#10b981',   // Emerald 500
+                successLight: '#34d399', // Emerald 400
+                successDark: '#059669',  // Emerald 600
+                warning: '#f59e0b',   // Amber 500
+                danger: '#ef4444',    // Red 500
+                info: '#0ea5e9',      // Sky 500
+                slate: '#64748b',     // Slate 500
+                slateDark: '#1e293b', // Slate 800
+                grid: 'rgba(148, 163, 184, 0.1)',
+                tooltipBg: 'rgba(15, 23, 42, 0.9)',
+                white: '#ffffff'
+            };
+
+            // Common Chart Options
+            const commonOptions = {
+                responsive: true,
+                maintainAspectRatio: false,
+                animation: {
+                    duration: 1500,
+                    easing: 'easeOutQuart'
+                },
+                plugins: {
+                    legend: {
+                        labels: {
+                            font: { family: fontFamily, size: 12, weight: 500 },
+                            usePointStyle: true,
+                            padding: 20,
+                            color: colors.slateDark
+                        }
+                    },
+                    tooltip: {
+                        backgroundColor: colors.tooltipBg,
+                        titleColor: colors.white,
+                        bodyColor: colors.white,
+                        borderColor: 'rgba(255,255,255,0.1)',
+                        borderWidth: 1,
+                        padding: 12,
+                        cornerRadius: 8,
+                        titleFont: { family: fontFamily, size: 13, weight: 600 },
+                        bodyFont: { family: fontFamily, size: 12 },
+                        displayColors: true,
+                        boxPadding: 4
+                    }
+                }
+            };
+
+            // --- 1. Task Status Doughnut Chart ---
+            if (statusChartRef.current && chartData.epc_split_completion_data && Object.keys(chartData.epc_split_completion_data).length > 0) {
+                const epcData = chartData.epc_split_completion_data;
+                const categoryOrder = ["Engineering", "Procurement", "Construction"];
+                const chartLabels = [], chartDataPoints = [], chartColors = [], chartBorderColors = [];
+
+                // Modern Palette for Doughnut
+                const categoryColors = {
+                    "Engineering": { main: '#3b82f6', light: 'rgba(59, 130, 246, 0.2)' }, // Blue
+                    "Procurement": { main: '#f59e0b', light: 'rgba(245, 158, 11, 0.2)' }, // Amber
+                    "Construction": { main: '#10b981', light: 'rgba(16, 185, 129, 0.2)' } // Emerald
+                };
+
+                categoryOrder.forEach(label => {
+                    if (epcData[label]) {
+                        const category = epcData[label];
+                        const progress = category.progress || 0;
+                        const totalWeight = category.weightage;
+                        const completedWeightPortion = totalWeight * (progress / 100);
+                        const notCompletedWeightPortion = totalWeight - completedWeightPortion;
+
+                        const colorSet = categoryColors[label] || { main: colors.slate, light: colors.grid };
+
+                        if (completedWeightPortion > 0) {
+                            chartLabels.push(`${label} - Completed`);
+                            chartDataPoints.push(completedWeightPortion);
+                            chartColors.push(colorSet.main);
+                            chartBorderColors.push(colors.white);
+                        }
+                        if (notCompletedWeightPortion > 0) {
+                            chartLabels.push(`${label} - Remaining`);
+                            chartDataPoints.push(notCompletedWeightPortion);
+                            chartColors.push(colorSet.light);
+                            chartBorderColors.push(colors.white);
+                        }
+                    }
+                });
+
+                const statusCtx = statusChartRef.current.getContext('2d');
+                if (statusChartRef.current.chart) statusChartRef.current.chart.destroy();
+
+                const statusChart = new Chart(statusCtx, {
+                    type: 'doughnut',
+                    data: {
+                        labels: chartLabels,
+                        datasets: [{
+                            data: chartDataPoints,
+                            backgroundColor: chartColors,
+                            borderColor: chartBorderColors,
+                            borderWidth: 2,
+                            hoverOffset: 15,
+                            borderRadius: 5
+                        }]
+                    },
+                    options: {
+                        ...commonOptions,
+                        cutout: '70%',
+                        plugins: {
+                            ...commonOptions.plugins,
+                            customDoughnutLabels: { epcData: epcData },
+                            legend: {
+                                position: 'bottom',
+                                labels: {
+                                    generateLabels: (chart) => categoryOrder.filter(label => epcData[label]).map((label) => ({
+                                        text: label,
+                                        fillStyle: categoryColors[label].main,
+                                        strokeStyle: categoryColors[label].main,
+                                        hidden: false,
+                                        index: categoryOrder.indexOf(label)
+                                    })),
+                                    usePointStyle: true,
+                                    padding: 20,
+                                    font: { family: fontFamily, size: 12, weight: 600 }
+                                }
+                            },
+                            title: { display: true, text: 'Completion Status by Weightage', font: { size: 16, weight: 700, family: fontFamily }, padding: 20, color: colors.slateDark },
+                            tooltip: {
+                                ...commonOptions.plugins.tooltip,
+                                callbacks: {
+                                    label: (context) => {
+                                        const label = context.label || '';
+                                        const value = context.raw;
+                                        return `${label}: ${value.toFixed(1)}%`;
+                                    }
+                                }
+                            }
+                        },
+                        layout: { padding: 20 }
+                    }
+                });
+                statusChartRef.current.chart = statusChart;
+                chartInstances.push(statusChart);
+            }
+
+            // --- 2. Planned vs Actual Line Chart (S-Curve) ---
+            if (progressCurveChartRef.current && chartData.s_curve_data && chartData.s_curve_data.dates && chartData.s_curve_data.dates.length > 0) {
+                const progressCtx = progressCurveChartRef.current.getContext('2d');
+                if (progressCurveChartRef.current.chart) progressCurveChartRef.current.chart.destroy();
+
+                // Gradients
+                const plannedGradient = progressCtx.createLinearGradient(0, 0, 0, 400);
+                plannedGradient.addColorStop(0, 'rgba(99, 102, 241, 0.3)'); // Indigo
+                plannedGradient.addColorStop(1, 'rgba(99, 102, 241, 0.0)');
+
+                const actualGradient = progressCtx.createLinearGradient(0, 0, 0, 400);
+                actualGradient.addColorStop(0, 'rgba(16, 185, 129, 0.3)'); // Emerald
+                actualGradient.addColorStop(1, 'rgba(16, 185, 129, 0.0)');
+
+                const progressChart = new Chart(progressCtx, {
+                    type: 'line',
+                    data: {
+                        labels: chartData.s_curve_data.dates,
+                        datasets: [
+                            {
+                                label: 'Planned Progress',
+                                data: chartData.s_curve_data.planned_progress,
+                                borderColor: colors.primary,
+                                backgroundColor: plannedGradient,
+                                fill: true,
+                                tension: 0.4, // Smoother curve
+                                pointRadius: 0,
+                                pointHoverRadius: 6,
+                                pointBackgroundColor: colors.white,
+                                pointBorderColor: colors.primary,
+                                pointBorderWidth: 2,
+                                borderWidth: 3
+                            },
+                            {
+                                label: 'Actual Progress',
+                                data: chartData.s_curve_data.actual_progress,
+                                borderColor: colors.success,
+                                backgroundColor: actualGradient,
+                                fill: true,
+                                tension: 0.4,
+                                pointRadius: 0,
+                                pointHoverRadius: 6,
+                                pointBackgroundColor: colors.white,
+                                pointBorderColor: colors.success,
+                                pointBorderWidth: 2,
+                                borderWidth: 3
+                            }
+                        ]
+                    },
+                    options: {
+                        ...commonOptions,
+                        interaction: { intersect: false, mode: 'index' },
+                        plugins: {
+                            ...commonOptions.plugins,
+                            legend: { position: 'top', align: 'end', labels: { usePointStyle: true, boxWidth: 8 } },
+                            title: { display: true, text: 'Planned vs Actual Progress (S-Curve)', font: { size: 16, weight: 700, family: fontFamily }, align: 'start', padding: { bottom: 20 }, color: colors.slateDark },
+                            tooltip: {
+                                ...commonOptions.plugins.tooltip,
+                                callbacks: {
+                                    label: (context) => `${context.dataset.label}: ${context.parsed.y.toFixed(1)}%`
+                                }
+                            }
+                        },
+                        scales: {
+                            y: {
+                                beginAtZero: true,
+                                max: 100,
+                                grid: { color: colors.grid, drawBorder: false },
+                                ticks: { font: { family: fontFamily }, color: colors.slate, callback: (val) => val + '%' },
+                                border: { display: false }
+                            },
+                            x: {
+                                grid: { display: false },
+                                ticks: { font: { family: fontFamily }, color: colors.slate, maxRotation: 0, autoSkip: true, maxTicksLimit: 8 },
+                                border: { display: false }
+                            }
+                        },
+                        layout: { padding: 10 }
+                    }
+                });
+                progressCurveChartRef.current.chart = progressChart;
+                chartInstances.push(progressChart);
+            }
+
+            // --- 3. Project Delays Bar Chart ---
+            if (delayChartRef.current && chartData.total_delays) {
+                const delayCtx = delayChartRef.current.getContext('2d');
+                const actualDelays = chartData.total_delays;
+                const plannedDelays = { weather: 10, contractor: 0, client: 0 }; // Example baseline
+
+                const labels = ['Weather', 'Contractor', 'Client'];
+                const actualData = labels.map(l => actualDelays[l.toLowerCase()] || 0);
+                const plannedData = labels.map(l => plannedDelays[l.toLowerCase()] || 0);
+
+                // Gradients
+                const plannedGradient = delayCtx.createLinearGradient(0, 0, 0, 300);
+                plannedGradient.addColorStop(0, '#60a5fa'); // Blue 400
+                plannedGradient.addColorStop(1, '#2563eb'); // Blue 600
+
+                const actualGradient = delayCtx.createLinearGradient(0, 0, 0, 300);
+                actualGradient.addColorStop(0, '#f87171'); // Red 400
+                actualGradient.addColorStop(1, '#dc2626'); // Red 600
+
+                if (delayChartRef.current.chart) delayChartRef.current.chart.destroy();
+
+                const delayChart = new Chart(delayCtx, {
+                    type: 'bar',
+                    data: {
+                        labels: labels,
+                        datasets: [
+                            {
+                                label: 'Planned Delay',
+                                data: plannedData,
+                                backgroundColor: plannedGradient,
+                                borderRadius: 6,
+                                barPercentage: 0.6,
+                                categoryPercentage: 0.8
+                            },
+                            {
+                                label: 'Actual Delay',
+                                data: actualData,
+                                backgroundColor: actualGradient,
+                                borderRadius: 6,
+                                barPercentage: 0.6,
+                                categoryPercentage: 0.8
+                            }
+                        ]
+                    },
+                    options: {
+                        ...commonOptions,
+                        scales: {
+                            y: {
+                                beginAtZero: true,
+                                title: { display: true, text: 'Days', color: colors.slate },
+                                grid: { color: colors.grid, drawBorder: false },
+                                ticks: { color: colors.slate, font: { family: fontFamily } },
+                                border: { display: false }
+                            },
+                            x: {
+                                grid: { display: false },
+                                ticks: { color: colors.slateDark, font: { family: fontFamily, weight: 500 } },
+                                border: { display: false }
+                            }
+                        },
+                        plugins: {
+                            ...commonOptions.plugins,
+                            title: { display: true, text: 'Project Delays Analysis', font: { size: 16, weight: 700, family: fontFamily }, align: 'start', padding: { bottom: 20 }, color: colors.slateDark },
+                            barValueLabels: { color: colors.white }
+                        }
+                    }
+                });
+                delayChartRef.current.chart = delayChart;
+                chartInstances.push(delayChart);
+            }
+
+            // --- 4. Engineering Progress Bar Chart (Horizontal) ---
+            if (engineeringDisciplineChartRef.current && chartData.engineering_disciplines_data && Object.keys(chartData.engineering_disciplines_data).length > 0) {
+                const disciplinesData = chartData.engineering_disciplines_data;
+                const labels = Object.keys(disciplinesData);
+                const progressValues = labels.map(label => disciplinesData[label].progress);
+
+                const engineeringDisciplineCtx = engineeringDisciplineChartRef.current.getContext('2d');
+                if (engineeringDisciplineChartRef.current.chart) engineeringDisciplineChartRef.current.chart.destroy();
+
+                // Horizontal Gradient
+                const barGradient = engineeringDisciplineCtx.createLinearGradient(0, 0, 400, 0);
+                barGradient.addColorStop(0, '#0ea5e9'); // Sky 500
+                barGradient.addColorStop(1, '#0284c7'); // Sky 600
+
+                const engineeringDisciplineChart = new Chart(engineeringDisciplineCtx, {
+                    type: 'bar',
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            label: 'Progress',
+                            data: progressValues,
+                            backgroundColor: barGradient,
+                            borderRadius: 4,
+                            barPercentage: 0.7,
+                            categoryPercentage: 0.8
+                        }]
+                    },
+                    options: {
+                        ...commonOptions,
+                        indexAxis: 'y',
+                        scales: {
+                            x: {
+                                beginAtZero: true,
+                                max: 100,
+                                grid: { color: colors.grid, drawBorder: false },
+                                ticks: { callback: (v) => v + '%', color: colors.slate, font: { family: fontFamily } },
+                                border: { display: false }
+                            },
+                            y: {
+                                grid: { display: false },
+                                ticks: { color: colors.slateDark, font: { family: fontFamily, weight: 500 } },
+                                border: { display: false }
+                            }
+                        },
+                        plugins: {
+                            ...commonOptions.plugins,
+                            legend: { display: false },
+                            title: { display: true, text: 'Engineering Discipline Progress', font: { size: 16, weight: 700, family: fontFamily }, align: 'start', padding: { bottom: 20 }, color: colors.slateDark },
+                            barValueLabels: { color: colors.white }
+                        }
+                    }
+                });
+                engineeringDisciplineChartRef.current.chart = engineeringDisciplineChart;
+                chartInstances.push(engineeringDisciplineChart);
+            }
+
+            // --- 5. EPC Progress Bar Chart ---
+            if (epcProgressChartRef.current && chartData.epc_split_completion_data && Object.keys(chartData.epc_split_completion_data).length > 0) {
+                const epcData = chartData.epc_split_completion_data;
+                const categories = ['Engineering', 'Procurement', 'Construction'];
+                const actualProgress = categories.map(cat => epcData[cat]?.progress || 0);
+                const plannedProgress = categories.map(cat => epcData[cat]?.planned_progress || 0);
+
+                const epcCtx = epcProgressChartRef.current.getContext('2d');
+                if (epcProgressChartRef.current.chart) epcProgressChartRef.current.chart.destroy();
+
+                const epcProgressChart = new Chart(epcCtx, {
+                    type: 'bar',
+                    data: {
+                        labels: categories,
+                        datasets: [
+                            {
+                                label: 'Planned',
+                                data: plannedProgress,
+                                backgroundColor: 'rgba(99, 102, 241, 0.8)', // Indigo
+                                borderRadius: 6,
+                                barPercentage: 0.6,
+                                categoryPercentage: 0.8
+                            },
+                            {
+                                label: 'Actual',
+                                data: actualProgress,
+                                backgroundColor: 'rgba(16, 185, 129, 0.8)', // Emerald
+                                borderRadius: 6,
+                                barPercentage: 0.6,
+                                categoryPercentage: 0.8
+                            }
+                        ]
+                    },
+                    options: {
+                        ...commonOptions,
+                        scales: {
+                            y: {
+                                beginAtZero: true,
+                                max: 100,
+                                grid: { color: colors.grid, drawBorder: false },
+                                ticks: { callback: (v) => v + '%', color: colors.slate, font: { family: fontFamily } },
+                                border: { display: false }
+                            },
+                            x: {
+                                grid: { display: false },
+                                ticks: { color: colors.slateDark, font: { family: fontFamily, weight: 600, size: 13 } },
+                                border: { display: false }
+                            }
+                        },
+                        plugins: {
+                            ...commonOptions.plugins,
+                            title: { display: true, text: 'EPC Progress: Planned vs Actual', font: { size: 16, weight: 700, family: fontFamily }, align: 'start', padding: { bottom: 20 }, color: colors.slateDark },
+                            barValueLabels: { color: colors.white }
+                        }
+                    }
+                });
+                epcProgressChartRef.current.chart = epcProgressChart;
+                chartInstances.push(epcProgressChart);
+            }
+
+            return () => {
+                window.removeEventListener('resize', handleResize);
+                chartInstances.forEach(chart => { if (chart && typeof chart.destroy === 'function') chart.destroy(); });
+                if (statusChartRef.current) statusChartRef.current.chart = null;
+                if (delayChartRef.current) delayChartRef.current.chart = null;
+                if (progressCurveChartRef.current) progressCurveChartRef.current.chart = null;
+                if (engineeringDisciplineChartRef.current) engineeringDisciplineChartRef.current.chart = null;
+                if (epcProgressChartRef.current) epcProgressChartRef.current.chart = null;
+            };
+        }, [chartData, isLoading, error]);
+
+        // Export functions
+        const exportAllChartsPDF = async () => {
+            if (typeof window.jspdf === 'undefined' || typeof html2canvas === 'undefined') {
+                alert('PDF export libraries not loaded');
+                return;
+            }
+            const { jsPDF } = window.jspdf;
+            const doc = new jsPDF('landscape', 'mm', 'a4');
+
+            // Chart refs and their titles
+            const chartRefs = [
+                { ref: statusChartRef, title: 'Task Status Distribution', cardClass: 'report-chart-card' },
+                { ref: delayChartRef, title: 'Project Delays Analysis', cardClass: 'report-chart-card' },
+                { ref: engineeringDisciplineChartRef, title: 'Engineering Progress by Discipline', cardClass: 'report-chart-card' },
+                { ref: progressCurveChartRef, title: 'Planned vs Actual Progress S-Curve', cardClass: 'report-chart-card' },
+                { ref: epcProgressChartRef, title: 'EPC Progress Actual vs Planned', cardClass: 'report-chart-card' }
+            ];
+
+            try {
+                let pageCount = 0;
+                for (const chartInfo of chartRefs) {
+                    if (!chartInfo.ref.current || !chartInfo.ref.current.chart) {
+                        continue; // Skip if chart doesn't exist
+                    }
+
+                    // Find the parent card element
+                    const canvas = chartInfo.ref.current;
+                    let cardElement = canvas.parentElement;
+                    while (cardElement && !cardElement.classList.contains('report-chart-card')) {
+                        cardElement = cardElement.parentElement;
+                    }
+
+                    if (!cardElement) {
+                        // Fallback: use canvas directly
+                        cardElement = canvas;
+                    }
+
+                    // Capture the chart card as image
+                    const canvasImg = await html2canvas(cardElement, {
+                        backgroundColor: '#ffffff',
+                        scale: 2,
+                        logging: false,
+                        useCORS: true
+                    });
+
+                    const imgData = canvasImg.toDataURL('image/png');
+                    const imgWidth = doc.internal.pageSize.getWidth();
+                    const imgHeight = (canvasImg.height * imgWidth) / canvasImg.width;
+
+                    // Add new page if not first chart
+                    if (pageCount > 0) {
+                        doc.addPage();
+                    }
+
+                    // Add title
+                    doc.setFontSize(16);
+                    doc.text(chartInfo.title, 14, 20);
+
+                    // Add chart image
+                    doc.addImage(imgData, 'PNG', 14, 30, imgWidth - 28, imgHeight);
+
+                    pageCount++;
+                }
+
+                if (pageCount === 0) {
+                    alert('No charts available to export');
+                    return;
+                }
+
+                // Save PDF
+                doc.save('reports.pdf');
+            } catch (error) {
+                console.error('Error generating PDF:', error);
+                alert('Failed to generate PDF: ' + error.message);
+            }
+        };
+
+        const exportChartsCSV = () => {
+            if (!chartData) return;
+            let csvContent = 'Chart,Category,Value\n';
+            if (chartData.epc_split_completion_data) {
+                Object.keys(chartData.epc_split_completion_data).forEach(category => {
+                    const data = chartData.epc_split_completion_data[category];
+                    csvContent += `EPC Progress,${category},${data.progress}\n`;
+                });
+            }
+            const blob = new Blob([csvContent], { type: 'text/csv' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = 'reports_data.csv';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url);
+        };
+
+        // Filter handlers
+        useEffect(() => {
+            const applyBtn = document.getElementById('apply-filters-btn');
+            const resetBtn = document.getElementById('reset-filters-btn');
+            const projectSelector = document.getElementById('project-selector');
+            const dateStart = document.getElementById('date-range-start');
+            const dateEnd = document.getElementById('date-range-end');
+
+            // Auto-update when project selection changes
+            const handleProjectChange = () => {
+                const selectedProject = projectSelector ? projectSelector.value : '';
+                if (selectedProject) {
+                    setSelectedProjects([selectedProject]);
+                    setError(null);
+                    // Update date range from current inputs
+                    setDateRange({ start: dateStart ? dateStart.value : '', end: dateEnd ? dateEnd.value : '' });
+                } else {
+                    setSelectedProjects([]);
+                    setChartData(null);
+                }
+            };
+
+            if (projectSelector) {
+                projectSelector.addEventListener('change', handleProjectChange);
+            }
+
+            if (applyBtn) {
+                applyBtn.onclick = () => {
+                    const selectedProject = projectSelector ? projectSelector.value : '';
+                    if (!selectedProject) {
+                        setError('Please select a project to view reports.');
+                        return;
+                    }
+                    setSelectedProjects([selectedProject]);
+                    setDateRange({ start: dateStart ? dateStart.value : '', end: dateEnd ? dateEnd.value : '' });
+                    fetchChartData();
+                };
+            }
+
+            if (resetBtn) {
+                resetBtn.onclick = () => {
+                    // Reset to first project instead of clearing
+                    if (projectSelector && projects.length > 0) {
+                        projectSelector.value = projects[0].name;
+                        setSelectedProjects([projects[0].name]);
+                    }
+                    if (dateStart) dateStart.value = '';
+                    if (dateEnd) dateEnd.value = '';
+                    setDateRange({ start: '', end: '' });
+                    fetchChartData();
+                };
+            }
+
+            return () => {
+                if (projectSelector) {
+                    projectSelector.removeEventListener('change', handleProjectChange);
+                }
+            };
+        }, [projects]);
+
+        // Export button handlers
+        useEffect(() => {
+            const exportPdfBtn = document.getElementById('export-pdf-btn');
+            const exportCsvBtn = document.getElementById('export-csv-btn');
+            const printBtn = document.getElementById('print-btn');
+
+            if (exportPdfBtn) exportPdfBtn.onclick = exportAllChartsPDF;
+            if (exportCsvBtn) exportCsvBtn.onclick = exportChartsCSV;
+            if (printBtn) printBtn.onclick = () => window.print();
+        }, []);
+
+        // Render
+        if (isLoading && !chartData) {
+            return React.createElement(LoadingSpinner, { message: 'Loading Reports...' });
+        }
+
+        if (error) {
+            return React.createElement('div', { className: 'p-6 bg-red-50 border border-red-200 rounded-lg text-red-700' },
+                React.createElement('p', { className: 'font-semibold' }, 'Error:'),
+                React.createElement('p', null, error)
+            );
+        }
+
+        // Show message if no project is selected
+        if (!selectedProjects.length || selectedProjects.length === 0) {
+            return React.createElement('div', { className: 'p-6 bg-blue-50 border border-blue-200 rounded-lg text-blue-700 text-center' },
+                React.createElement('p', { className: 'font-semibold text-lg mb-2' }, 'Select a Project'),
+                React.createElement('p', null, 'Please select a project from the filter above to view reports and analytics.')
+            );
+        }
+
+        const hasDataForCharts = chartData && (Object.keys(chartData.epc_split_completion_data || {}).length > 0 || (chartData.s_curve_data && chartData.s_curve_data.dates && chartData.s_curve_data.dates.length > 0) || (chartData.engineering_disciplines_data && Object.keys(chartData.engineering_disciplines_data).length > 0));
+
+        return React.createElement('div', { className: 'reports-grid' },
+            !hasDataForCharts ? React.createElement('div', { className: 'col-span-2 text-center py-10 text-slate-500' }, 'No chart data available for the selected project.') : React.createElement(React.Fragment, null,
+                React.createElement('div', { className: 'report-chart-card' },
+                    React.createElement(DownloadButton, { chartRef: statusChartRef, chartTitle: 'Task Status Distribution' }),
+                    React.createElement('div', { className: 'chart-container' },
+                        React.createElement('canvas', { ref: statusChartRef })
+                    )
+                ),
+                React.createElement('div', { className: 'report-chart-card' },
+                    React.createElement(DownloadButton, { chartRef: delayChartRef, chartTitle: 'Project Delays Analysis' }),
+                    React.createElement('div', { className: 'chart-container' },
+                        React.createElement('canvas', { ref: delayChartRef })
+                    )
+                ),
+                React.createElement('div', { className: 'report-chart-card' },
+                    React.createElement(DownloadButton, { chartRef: engineeringDisciplineChartRef, chartTitle: 'Engineering Progress by Discipline' }),
+                    React.createElement('div', { className: 'chart-container' },
+                        React.createElement('canvas', { ref: engineeringDisciplineChartRef })
+                    )
+                ),
+                React.createElement('div', { className: 'report-chart-card' },
+                    React.createElement(DownloadButton, { chartRef: progressCurveChartRef, chartTitle: 'Planned vs Actual Progress S-Curve' }),
+                    React.createElement('div', { className: 'chart-container' },
+                        React.createElement('canvas', { ref: progressCurveChartRef })
+                    )
+                ),
+                React.createElement('div', { className: 'report-chart-card full-width' },
+                    React.createElement(DownloadButton, { chartRef: epcProgressChartRef, chartTitle: 'EPC Progress Actual vs Planned' }),
+                    React.createElement('div', { className: 'chart-container' },
+                        React.createElement('canvas', { ref: epcProgressChartRef })
+                    )
+                )
+            )
+        );
+    };
+</script>

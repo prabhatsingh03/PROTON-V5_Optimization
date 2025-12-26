@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}PROTON - Dashboard{% endblock %}</title>
+    <link rel="icon" href="/static/favicon.ico" type="image/x-icon">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Poppins:wght@400;500;600;700&display=swap"
+        rel="stylesheet">
+    {% include 'dashboard/styles.html' %}
+    {% block extra_head %}{% endblock %}
+</head>
+
+<body>
+    <div class="flex h-screen bg-slate-50">
+        <!-- Sidebar -->
+        {% include 'dashboard/components/sidebar_ssr.html' %}
+
+        <!-- Main Content Area -->
+        <div class="flex-1 flex flex-col overflow-hidden layout-outer">
+            <!-- Top Header -->
+            <header class="bg-white shadow-sm z-10 layout-header">
+                {% block header %}{% endblock %}
+            </header>
+
+            <!-- Page Content -->
+            <main class="flex-1 overflow-x-hidden overflow-y-auto layout-main">
+                {% block content %}{% endblock %}
+            </main>
+        </div>
+    </div>
+
+    <!-- React/Babel Scripts -->
+    <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <!-- 
+      Authentication & Configuration
+
+      auth_config.html provides client-side authentication checks for all dashboard pages.
+      It verifies JWT tokens in localStorage and redirects unauthenticated users to /
+      This pattern is used for all HTML routes, with server-side auth only for API routes.
+    -->
+    {% include 'dashboard/auth_config.html' %}
+
+    <!-- Server Variable Injection Script -->
+    <script>
+        (function () {
+            try {
+                // Ensure decodeBase64Url is available if not loaded from auth_config
+                function safeDecodeBase64Url(base64Url) {
+                    if (typeof decodeBase64Url === 'function') {
+                        return decodeBase64Url(base64Url);
+                    }
+                    // Fallback implementation if not yet defined
+                    let base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+                    while (base64.length % 4) {
+                        base64 += '=';
+                    }
+                    return atob(base64);
+                }
+
+                const accessToken = localStorage.getItem('access_token');
+                if (accessToken) {
+                    // Decode JWT to extract org_id and role
+                    const payload = accessToken.split('.')[1];
+                    const decodedPayload = JSON.parse(safeDecodeBase64Url(payload));
+                    const orgId = decodedPayload.org_id || null;
+                    const role = decodedPayload.role || 'org_user';
+
+
+                    // Set window variables
+                    window.__ORG_ID__ = orgId;
+                    window.__IS_ADMIN__ = (role === 'org_admin' || role === 'super_admin');
+
+                    // Fetch tour_seen status from API (only if helper is available)
+                    if (orgId && typeof makeAuthenticatedRequest === 'function') {
+                        makeAuthenticatedRequest('/api/org/tour-seen', {
+                            method: 'GET',
+                            headers: { 'Content-Type': 'application/json' }
+                        })
+                            .then(res => res.ok ? res.json() : Promise.reject(new Error('API call failed')))
+                            .then(data => {
+                                window.__ORG_TOUR_SEEN__ = data.tour_seen || false;
+                            })
+                            .catch(err => {
+                                console.warn('Failed to fetch tour_seen status:', err);
+                                window.__ORG_TOUR_SEEN__ = false;
+                            });
+                    } else if (orgId && typeof makeAuthenticatedRequest !== 'function') {
+                        console.warn('makeAuthenticatedRequest is not yet available; skipping tour_seen fetch.');
+                        window.__ORG_TOUR_SEEN__ = false;
+                    } else {
+                        window.__ORG_TOUR_SEEN__ = false;
+                    }
+                } else {
+                    window.__ORG_ID__ = null;
+                    window.__IS_ADMIN__ = false;
+                    window.__ORG_TOUR_SEEN__ = false;
+                }
+            } catch (error) {
+                console.warn('Error in server variable injection:', error);
+                window.__ORG_ID__ = null;
+                window.__IS_ADMIN__ = false;
+                window.__ORG_TOUR_SEEN__ = false;
+            }
+        })();
+    </script>
+
+    <!-- Utility Functions & Components -->
+    {% include 'dashboard/utilities.html' %}
+
+    <!-- Conditional Component Loading -->
+
+    <!-- Dashboard Home -->
+    {% if request.endpoint == 'dashboard' %}
+    {% include 'dashboard/modals/subscription_modals.html' %}
+    {% include 'dashboard/components/onboarding_tutorial.html' %}
+    {% include 'dashboard/components/dashboard_app.html' %}
+    {% endif %}
+
+    <!-- Projects List -->
+    {% if request.endpoint == 'dashboard_projects' %}
+    {% include 'dashboard/components/project_card.html' %}
+    {% include 'dashboard/components/projects_app.html' %}
+    {% endif %}
+
+    <!-- Workspace -->
+    {% if request.endpoint == 'dashboard_workspace' %}
+    {% include 'dashboard/modals/task_modals.html' %}
+    {% include 'dashboard/modals/subscription_modals.html' %}
+    {% include 'dashboard/components/visualizations.html' %}
+    {% include 'dashboard/components/task_table.html' %}
+    {% include 'dashboard/modals/communication_modals.html' %}
+
+    {% include 'dashboard/components/workspace_app.html' %}
+    {% include 'dashboard/components/overview_tab.html' %}
+    {% include 'dashboard/components/wbs_tab.html' %}
+    {% include 'dashboard/components/gantt_tab.html' %}
+    {% include 'dashboard/components/ai_insights_tab.html' %}
+    {% include 'dashboard/components/documents_tab.html' %}
+    {% include 'dashboard/components/communication_tab.html' %}
+    {% include 'dashboard/components/team_permissions_tab.html' %}
+    {% endif %}
+
+    <!-- Reports -->
+    {% if request.endpoint == 'dashboard_reports' %}
+    {% include 'dashboard/components/reports_app.html' %}
+    {% endif %}
+
+    <!-- Admin Panel -->
+    {% if request.endpoint == 'dashboard_admin' %}
+    {% include 'dashboard/components/admin_panel_app.html' %}
+    {% endif %}
+
+    <!-- Client View -->
+    {% if request.endpoint == 'dashboard_client_view' %}
+    {% include 'dashboard/components/visualizations.html' %}
+    {% include 'dashboard/modals/communication_modals.html' %}
+    {% include 'dashboard/components/client_view_app.html' %}
+    {% endif %}
+
+    <!-- React Render Script -->
+    <script type="text/babel">
+        // Sidebar is now SSR (Server Side Rendered) via sidebar_ssr.html
+        // No React hydration needed for sidebar
+
+        const dashboardRootElement = document.getElementById('dashboard-root');
+        if (dashboardRootElement && typeof DashboardApp === 'function') {
+            const root = ReactDOM.createRoot(dashboardRootElement);
+            root.render(React.createElement(DashboardApp));
+        } else {
+            const legacyRootElement = document.getElementById('root');
+            if (legacyRootElement && typeof App === 'function') {
+                const root = ReactDOM.createRoot(legacyRootElement);
+                root.render(React.createElement(App));
+            }
+        }
+
+        const projectsRootElement = document.getElementById('projects-root');
+        if (projectsRootElement && typeof ProjectsApp === 'function') {
+            const projectsRoot = ReactDOM.createRoot(projectsRootElement);
+            projectsRoot.render(React.createElement(ProjectsApp));
+        }
+
+        const workspaceRootElement = document.getElementById('workspace-root');
+        if (workspaceRootElement && typeof WorkspaceApp === 'function') {
+            const projectId = workspaceRootElement.getAttribute('data-project-id');
+            const workspaceRoot = ReactDOM.createRoot(workspaceRootElement);
+            workspaceRoot.render(React.createElement(WorkspaceApp, { projectId }));
+        }
+
+        const reportsRootElement = document.getElementById('reports-root');
+        if (reportsRootElement && typeof ReportsApp === 'function') {
+            const reportsRoot = ReactDOM.createRoot(reportsRootElement);
+            reportsRoot.render(React.createElement(ReportsApp));
+        }
+
+        const adminPanelRootElement = document.getElementById('admin-panel-root');
+        if (adminPanelRootElement && typeof AdminPanelApp === 'function') {
+            const adminPanelRoot = ReactDOM.createRoot(adminPanelRootElement);
+            adminPanelRoot.render(React.createElement(AdminPanelApp));
+        }
+
+        const clientViewRootElement = document.getElementById('client-view-root');
+        if (clientViewRootElement && typeof ClientViewApp === 'function') {
+            const clientViewRoot = ReactDOM.createRoot(clientViewRootElement);
+            clientViewRoot.render(React.createElement(ClientViewApp));
+        }
+
+        // Auto-start onboarding tutorial logic
+        (function initOnboardingAutoStart() {
+            const CHECK_INTERVAL = 500;
+            let dispatched = false;
+
+            const pollForTutorialStart = () => {
+                if (dispatched) return;
+
+                if (typeof window.__ORG_TOUR_SEEN__ === 'undefined') {
+                    setTimeout(pollForTutorialStart, CHECK_INTERVAL);
+                    return;
+                }
+
+                const tourSeenByUser = localStorage.getItem('tourSeenByUser');
+                const tourSeenByOrg = Boolean(window.__ORG_TOUR_SEEN__);
+
+                if (!tourSeenByUser && !tourSeenByOrg) {
+                    window.dispatchEvent(new CustomEvent('startOnboardingTour'));
+                    dispatched = true;
+                    return;
+                }
+
+                // Stop polling once we know the tour shouldn't auto-start
+                if (tourSeenByUser || tourSeenByOrg) {
+                    dispatched = true;
+                    return;
+                }
+
+                setTimeout(pollForTutorialStart, CHECK_INTERVAL);
+            };
+
+            setTimeout(pollForTutorialStart, CHECK_INTERVAL);
+        })();
+
+    </script>
+</body>
+
+</html>

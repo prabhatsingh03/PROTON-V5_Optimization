@@ -1,0 +1,302 @@
+<script type="text/babel">
+    const TaskTable = ({ tasks, viewType, loggedInUserType, sortBy, onSort, areAllExpanded, onToggleAllExpansion, hasMoreTasks, isLoadingMore, loadMoreTasks, isTrialExpired, ...props }) => {
+        const { useMemo } = React;
+
+        const commonHeaders = [{ key: 'wbs', label: 'WBS' }, { key: 'taskName', label: 'Task Name / Deliverable' }, { key: 'plannedStartDate', label: 'Planned Start' }, { key: 'plannedEndDate', label: 'Planned End' }, { key: 'status', label: 'Status' }, { key: 'progress', label: 'Progress' },];
+        let headers = (loggedInUserType !== 'client' && viewType === 'admin') ? [...commonHeaders, { key: 'actualStartDate', label: 'Actual Start' }, { key: 'actualEndDate', label: 'Actual End' }, { key: 'isCritical', label: 'Critical?' }, { key: 'delayWeatherDays', label: 'Weather Delay' }, { key: 'delayContractorDays', label: 'Ctr. Delay' }, { key: 'delayClientDays', label: 'Client Delay' }, { key: 'isClientDeliverable', label: 'Client View?' }, { key: 'clientComm', label: 'Client Comm.' }, { key: 'actions', label: 'Actions' }] : [...commonHeaders, { key: 'actualStartDate', label: 'Actual Start' }, { key: 'actualEndDate', label: 'Actual End' }, { key: 'isCritical', label: 'Critical' }, { key: 'delayWeatherDays', label: 'Weather Delay' }, { key: 'delayContractorDays', label: 'Ctr. Delay' }, { key: 'delayClientDays', label: 'Client Delay' }, { key: 'clientComm', label: 'Actions' }];
+
+        const areAllClientDeliverablesSelected = useMemo(() => {
+            let allDeliverables = true;
+            const checkTasks = (taskList) => {
+                if (!taskList) return;
+                for (const task of taskList) {
+                    if (!task.isClientDeliverable) {
+                        allDeliverables = false;
+                        return;
+                    }
+                    if (task.subtasks) checkTasks(task.subtasks);
+                }
+            };
+            checkTasks(tasks);
+            return tasks.length > 0 && allDeliverables;
+        }, [tasks]);
+
+        return (React.createElement("div", { className: "overflow-x-auto bg-white shadow-xl rounded-xl" },
+            React.createElement("table", { className: "min-w-full divide-y divide-slate-200 border-collapse" },
+                React.createElement("thead", { className: "bg-slate-50" },
+                    React.createElement("tr", null, headers.map((header, index) => {
+                        const isWBS = header.key === 'wbs';
+                        // --- Removed sticky classes ---
+                        const headerClasses = `px-4 py-3.5 text-left text-sm font-semibold text-slate-700 bg-slate-50 ${isWBS ? 'cursor-pointer hover:bg-slate-200' : ''}`;
+
+                        return React.createElement("th", {
+                            key: header.key,
+                            scope: "col",
+                            className: headerClasses,
+                            onClick: isWBS ? onToggleAllExpansion : undefined,
+                            title: isWBS ? (areAllExpanded ? 'Collapse All Tasks' : 'Expand All Tasks') : undefined
+                        },
+                            React.createElement("div", { className: "flex items-center" },
+                                isWBS && (areAllExpanded ? React.createElement(ChevronUp, { className: "inline mr-1 h-4 w-4 text-sky-600" }) : React.createElement(ChevronDown, { className: "inline mr-1 h-4 w-4 text-sky-600" })),
+                                header.key === 'isClientDeliverable' && viewType === 'admin' ?
+                                    React.createElement(React.Fragment, null,
+                                        React.createElement("input", {
+                                            type: "checkbox",
+                                            className: "h-4 w-4 rounded text-sky-600 border-slate-300 focus:ring-sky-500 mr-2",
+                                            checked: areAllClientDeliverablesSelected,
+                                            onChange: () => props.onToggleAllClientDeliverables(!areAllClientDeliverablesSelected),
+                                            title: areAllClientDeliverablesSelected ? "Deselect All" : "Select All"
+                                        }),
+                                        header.label
+                                    ) : header.label
+                            ));
+                    }))
+                ),
+                React.createElement("tbody", { className: "divide-y divide-slate-200 bg-white" }, tasks.map(task => (
+                    React.createElement(TaskRow, {
+                        key: task.id,
+                        task: task,
+                        viewType: viewType,
+                        loggedInUserType: loggedInUserType,
+                        level: 0,
+                        isTrialExpired: isTrialExpired,
+                        ...props
+                    })
+                )))
+            ),
+            // Load More Section
+            hasMoreTasks && React.createElement("div", { className: "border-t border-slate-200 bg-slate-50 p-4 text-center" },
+                isLoadingMore ?
+                    React.createElement("div", { className: "flex items-center justify-center space-x-2" },
+                        React.createElement("div", { className: "animate-spin rounded-full h-4 w-4 border-b-2 border-sky-600" }),
+                        React.createElement("span", { className: "text-sm text-slate-600" }, "Loading more tasks...")
+                    ) :
+                    React.createElement("button", {
+                        onClick: loadMoreTasks,
+                        className: "px-4 py-2 bg-sky-600 hover:bg-sky-700 text-white text-sm rounded-md transition-colors"
+                    }, "Load More Tasks")
+            )
+        ));
+    };
+
+    // --- Role-Based UI Helper Functions (defined before TaskRow for scope access) ---
+    const canManageUsers = (role) => ['super_admin', 'org_admin'].includes(role);
+    const canManageProjects = (role) => ['super_admin', 'org_admin'].includes(role);
+    const canViewActivityLogs = (role) => ['super_admin', 'org_admin'].includes(role);
+    const canApproveAdmins = (role) => role === 'super_admin';
+    const isSuperAdmin = (role) => role === 'super_admin';
+    const isOrgAdmin = (role) => role === 'org_admin';
+    const isOrgUser = (role) => role === 'org_user';
+    const canEditTask = (role) => ['super_admin', 'org_admin', 'org_user'].includes(role);
+
+    const TaskRow = ({ task, viewType, loggedInUserType, onUpdateTask, onEditTask, onAIUpdate, onShowNotes, onShowDetails, onClientComm, onToggleClientDeliverable, onToggleExpansion, onAddTask, onAddSubTask, onDeleteTask, level, isTrialExpired }) => {
+        const { useState, useEffect, useRef } = React;
+        const [showDropdown, setShowDropdown] = useState(false);
+        const dropdownRef = useRef(null);
+        
+        // Close dropdown when clicking outside
+        useEffect(() => {
+            const handleClickOutside = (event) => {
+                if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
+                    setShowDropdown(false);
+                }
+            };
+            if (showDropdown) {
+                document.addEventListener('mousedown', handleClickOutside);
+            }
+            return () => {
+                document.removeEventListener('mousedown', handleClickOutside);
+            };
+        }, [showDropdown]);
+        
+        const renderStatusPill = (status) => { const baseClasses = "px-2 py-1 text-xs font-semibold rounded-full"; const colorClasses = { 'Not Started': 'bg-slate-200 text-slate-700', 'In Progress': 'bg-blue-100 text-blue-700', 'Completed': 'bg-green-100 text-green-700', 'Delayed': 'bg-red-100 text-red-700', 'On Hold': 'bg-yellow-100 text-yellow-700', 'Ahead of Schedule': 'bg-sky-100 text-sky-700' }; return React.createElement("span", { className: `${baseClasses} ${colorClasses[status] || 'bg-slate-200 text-slate-700'}` }, status || 'Not Started'); };
+        const handleCriticalToggle = () => { if (loggedInUserType !== 'client') { onUpdateTask(task.id, { isCritical: !task.isCritical }); } };
+        const latestClientComment = task.clientComments && task.clientComments.length > 0 ? task.clientComments[task.clientComments.length - 1] : null;
+
+        const isPendingForClient = task.clientComments && task.clientComments.some(c => !c.clientStatus);
+        const isPendingForAdmin = task.clientComments && task.clientComments.some(c => c.clientStatus && c.adminSeen === false);
+
+        const hasSubtasks = task.subtasks && task.subtasks.length > 0;
+        const indentStyle = { paddingLeft: `${1 + (level * 1.5)}rem` };
+        
+        let actionButtons = [];
+        if (canEditTask(loggedInUserType) && viewType === 'admin') {
+            const disabledClass = isTrialExpired ? 'opacity-50 cursor-not-allowed' : '';
+            const disabledTitle = isTrialExpired ? 'Trial expired. Upgrade to continue.' : undefined;
+            
+            // Three-dot dropdown menu
+            actionButtons = [
+                React.createElement("div", {
+                    key: "dropdown-container",
+                    ref: dropdownRef,
+                    className: "relative inline-block"
+                },
+                    React.createElement("button", {
+                        onClick: (e) => {
+                            e.stopPropagation();
+                            setShowDropdown(!showDropdown);
+                        },
+                        className: `p-1 rounded hover:bg-gray-100 ${disabledClass}`,
+                        title: "Actions",
+                        disabled: isTrialExpired
+                    }, React.createElement("svg", {
+                        className: "w-5 h-5 text-gray-600",
+                        fill: "none",
+                        stroke: "currentColor",
+                        viewBox: "0 0 24 24"
+                    }, React.createElement("path", {
+                        strokeLinecap: "round",
+                        strokeLinejoin: "round",
+                        strokeWidth: 2,
+                        d: "M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z"
+                    }))),
+                    showDropdown && React.createElement("div", {
+                        className: "wbs-action-dropdown absolute right-0 mt-1 bg-white rounded-md shadow-lg z-20 min-w-[180px] py-1"
+                    },
+                        React.createElement("button", {
+                            onClick: (e) => {
+                                e.stopPropagation();
+                                onAddSubTask(task);
+                                setShowDropdown(false);
+                            },
+                            disabled: isTrialExpired,
+                            title: disabledTitle || "Add Sub-task",
+                            className: `w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 flex items-center gap-2 ${disabledClass}`
+                        }, React.createElement(CornerDownRight, { size: 16 }), "Add Sub-task"),
+                        React.createElement("button", {
+                            onClick: (e) => {
+                                e.stopPropagation();
+                                onAddTask(task);
+                                setShowDropdown(false);
+                            },
+                            disabled: isTrialExpired,
+                            title: disabledTitle || "Add Task Below",
+                            className: `w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 flex items-center gap-2 ${disabledClass}`
+                        }, React.createElement(PlusCircle, { size: 16 }), "Add Task Below"),
+                        React.createElement("div", { className: "border-t border-gray-200 my-1" }),
+                        React.createElement("button", {
+                            onClick: (e) => {
+                                e.stopPropagation();
+                                onEditTask(task);
+                                setShowDropdown(false);
+                            },
+                            disabled: isTrialExpired,
+                            title: disabledTitle || "Edit Task",
+                            className: `w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 flex items-center gap-2 ${disabledClass}`
+                        }, React.createElement(Edit3, { size: 16 }), "Edit Task"),
+                        React.createElement("button", {
+                            onClick: (e) => {
+                                e.stopPropagation();
+                                onAIUpdate(task);
+                                setShowDropdown(false);
+                            },
+                            disabled: isTrialExpired,
+                            title: disabledTitle || "AI Update & Risk Assessment",
+                            className: `w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 flex items-center gap-2 ai-risk-card risk-widget ${disabledClass}`
+                        }, React.createElement(Zap, { size: 16 }), "AI Update"),
+                        React.createElement("button", {
+                            onClick: (e) => {
+                                e.stopPropagation();
+                                onShowNotes(task);
+                                setShowDropdown(false);
+                            },
+                            disabled: isTrialExpired,
+                            title: disabledTitle || "View/Add Notes",
+                            className: `w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 flex items-center gap-2 ${disabledClass}`
+                        }, React.createElement(MessageSquareIcon, { size: 16 }), "View/Add Notes"),
+                        canManageProjects(loggedInUserType) && React.createElement(React.Fragment, null,
+                            React.createElement("div", { className: "border-t border-gray-200 my-1" }),
+                            React.createElement("button", {
+                                onClick: (e) => {
+                                    e.stopPropagation();
+                                    onDeleteTask(task.id);
+                                    setShowDropdown(false);
+                                },
+                                disabled: isTrialExpired,
+                                title: disabledTitle || "Delete Task",
+                                className: `w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50 flex items-center gap-2 ${disabledClass}`
+                            }, React.createElement(Trash2, { size: 16 }), "Delete Task")
+                        )
+                    )
+                )
+            ];
+        }
+
+        const isDelayed = task.status === 'Delayed' || (task.delayWeatherDays || 0) > 0 || (task.delayContractorDays || 0) > 0 || (task.delayClientDays || 0) > 0;
+
+        let rowClasses = ['transition-colors', 'duration-150'];
+        if (hasSubtasks) { rowClasses.push('font-bold'); }
+        if (task.isCritical) { rowClasses.push('bg-red-50'); }
+
+
+        return (
+            React.createElement(React.Fragment, null,
+                React.createElement("tr", { id: `wbs-${task.wbs}`, className: rowClasses.join(' ') },
+                    React.createElement("td", { className: "px-4 py-3 text-sm text-slate-600 whitespace-nowrap w-[120px]", style: { backgroundColor: task.isCritical ? '#fef2f2' : '#ffffff' } },
+                        React.createElement("span", { style: indentStyle }, task.wbs)
+                    ),
+                    React.createElement("td", { className: `px-4 py-3 text-sm w-[300px] max-w-[300px] ${hasSubtasks ? 'text-slate-900' : 'text-slate-800'}`, style: { backgroundColor: task.isCritical ? '#fef2f2' : '#ffffff' } },
+                        hasSubtasks && (
+                            React.createElement("button", {
+                                onClick: () => onToggleExpansion(task.id),
+                                className: "mr-1 text-xs text-sky-600 hover:text-sky-700 align-middle"
+                            }, task.isExpanded ? React.createElement(ChevronUp, { size: 16, className: "inline" }) : React.createElement(ChevronDown, { size: 16, className: "inline" }))
+                        ),
+                        task.isCritical && React.createElement(AlertTriangle, { size: 14, className: "inline mr-1 text-red-500" }),
+                        React.createElement("span", null, task.taskName),
+                        React.createElement("button", { onClick: () => onShowDetails(task), className: "ml-2 text-slate-400 hover:text-blue-500 align-middle", title: "View Details" }, React.createElement(InfoIcon, { size: 14 }))
+                    ),
+                    React.createElement("td", { className: "px-4 py-3 text-sm text-slate-600 whitespace-nowrap w-[120px]", style: { backgroundColor: task.isCritical ? '#fef2f2' : '#ffffff' } }, formatDateForDisplay(task.plannedStartDate)),
+                    React.createElement("td", { className: "px-4 py-3 text-sm text-slate-600 whitespace-nowrap w-[120px]", style: { backgroundColor: task.isCritical ? '#fef2f2' : '#ffffff' } }, formatDateForDisplay(task.plannedEndDate)),
+                    React.createElement("td", { className: "px-4 py-3 text-sm whitespace-nowrap w-[140px]", style: { backgroundColor: task.isCritical ? '#fef2f2' : '#ffffff' } }, renderStatusPill(task.status)),
+                    React.createElement("td", { className: "px-4 py-3 text-sm text-slate-600 whitespace-nowrap w-[120px]", style: { backgroundColor: task.isCritical ? '#fef2f2' : '#ffffff' } }, React.createElement("div", { className: "w-full bg-slate-200 rounded-full h-2.5" }, React.createElement("div", { className: "bg-blue-500 h-2.5 rounded-full", style: { width: `${task.progress || 0}%` } })), React.createElement("span", { className: "text-xs ml-1" }, task.progress || 0, "%")),
+                    loggedInUserType !== 'client' && viewType === 'admin' && (React.createElement(React.Fragment, null,
+                        React.createElement("td", { className: "px-4 py-3 text-sm text-slate-600 whitespace-nowrap w-[120px]", style: { backgroundColor: task.isCritical ? '#fef2f2' : '#ffffff' } }, formatDateForDisplay(task.actualStartDate)),
+                        React.createElement("td", { className: "px-4 py-3 text-sm text-slate-600 whitespace-nowrap w-[120px]", style: { backgroundColor: task.isCritical ? '#fef2f2' : '#ffffff' } }, formatDateForDisplay(task.actualEndDate)),
+                        React.createElement("td", { className: "px-4 py-3 text-sm text-center cursor-pointer hover:bg-slate-100 w-[80px]", onClick: handleCriticalToggle, title: "Toggle Critical Status", style: { backgroundColor: task.isCritical ? '#fef2f2' : '#ffffff' } }, task.isCritical ? React.createElement(CheckCircle, { size: 18, className: "text-red-500" }) : React.createElement("span", { className: "text-slate-400" }, "-")),
+                        React.createElement("td", { className: "px-4 py-3 text-sm text-slate-600 text-center w-[100px]", style: { backgroundColor: task.isCritical ? '#fef2f2' : '#ffffff' } }, task.delayWeatherDays || 0),
+                        React.createElement("td", { className: "px-4 py-3 text-sm text-slate-600 text-center w-[100px]", style: { backgroundColor: task.isCritical ? '#fef2f2' : '#ffffff' } }, task.delayContractorDays || 0),
+                        React.createElement("td", { className: "px-4 py-3 text-sm text-slate-600 text-center w-[100px]", style: { backgroundColor: task.isCritical ? '#fef2f2' : '#ffffff' } }, task.delayClientDays || 0),
+                        React.createElement("td", { className: "px-4 py-3 text-sm text-slate-600 w-[120px]", style: { backgroundColor: task.isCritical ? '#fef2f2' : '#ffffff' } }, React.createElement("input", { type: "checkbox", className: "h-5 w-5 rounded text-sky-600 border-slate-300 focus:ring-sky-500 cursor-pointer", checked: !!task.isClientDeliverable, onChange: (e) => onToggleClientDeliverable(task, e.target.checked) })),
+                        React.createElement("td", { className: "px-4 py-3 text-sm text-slate-600 w-[120px]", style: { backgroundColor: task.isCritical ? '#fef2f2' : '#ffffff' } },
+                            React.createElement("button", { onClick: () => onClientComm(task), className: "relative text-blue-500 hover:text-blue-600 text-xs p-1 rounded hover:bg-blue-50 flex items-center" },
+                                React.createElement(MessageSquareIcon, { size: 16, className: "mr-1" }), "Comm ",
+                                isPendingForAdmin && React.createElement("span", { className: "absolute -top-1 -right-1 block h-2.5 w-2.5 rounded-full bg-red-500 ring-2 ring-white" })
+                            )
+                        ),
+                        React.createElement("td", { className: "px-4 py-3 text-sm text-slate-600 whitespace-nowrap space-x-2 w-[200px] task-actions actions-cell", style: { backgroundColor: task.isCritical ? '#fef2f2' : '#ffffff' } }, ...actionButtons)
+                    )),
+                    (loggedInUserType === 'client' || viewType === 'client') && (React.createElement(React.Fragment, null,
+                        React.createElement("td", { className: "px-4 py-3 text-sm text-slate-600 whitespace-nowrap w-[120px]", style: { backgroundColor: task.isCritical ? '#fef2f2' : '#ffffff' } }, formatDateForDisplay(task.actualStartDate)),
+                        React.createElement("td", { className: "px-4 py-3 text-sm text-slate-600 whitespace-nowrap w-[120px]", style: { backgroundColor: task.isCritical ? '#fef2f2' : '#ffffff' } }, formatDateForDisplay(task.actualEndDate)),
+                        React.createElement("td", { className: "px-4 py-3 text-sm text-center w-[80px]", style: { backgroundColor: task.isCritical ? '#fef2f2' : '#ffffff' } }, task.isCritical ? React.createElement(CheckCircle, { size: 18, className: "text-red-500" }) : React.createElement("span", { className: "text-slate-400" }, "-")),
+                        React.createElement("td", { className: "px-4 py-3 text-sm text-slate-600 text-center w-[100px]", style: { backgroundColor: task.isCritical ? '#fef2f2' : '#ffffff' } }, task.delayWeatherDays || 0),
+                        React.createElement("td", { className: "px-4 py-3 text-sm text-slate-600 text-center w-[100px]", style: { backgroundColor: task.isCritical ? '#fef2f2' : '#ffffff' } }, task.delayContractorDays || 0),
+                        React.createElement("td", { className: "px-4 py-3 text-sm text-slate-600 text-center w-[100px]", style: { backgroundColor: task.isCritical ? '#fef2f2' : '#ffffff' } }, task.delayClientDays || 0),
+                        React.createElement("td", { className: "px-4 py-3 text-sm text-slate-600 whitespace-nowrap w-[150px]", style: { backgroundColor: task.isCritical ? '#fef2f2' : '#ffffff' } },
+                            React.createElement("div", { className: "flex items-center space-x-2" },
+                                React.createElement("button", { onClick: () => onClientComm(task), className: "relative text-blue-500 hover:text-blue-600", title: "View Comments" },
+                                    React.createElement(MessageSquareIcon, { size: 18 }),
+                                    isPendingForClient && React.createElement("span", { className: "absolute -top-1 -right-1 block h-2.5 w-2.5 rounded-full bg-red-500 ring-2 ring-white" })
+                                ),
+                                React.createElement("button", { onClick: () => onAIUpdate(task), className: "text-purple-500 hover:text-purple-600 ai-risk-card risk-widget", title: "AI Suggestions" }, React.createElement(Zap, { size: 18 }))
+                            )
+                        )
+                    ))
+                ),
+                task.isExpanded && hasSubtasks && task.subtasks.map(subtask => (
+                    React.createElement(TaskRow, {
+                        key: subtask.id,
+                        task: subtask,
+                        level: level + 1,
+                        onAddTask: onAddTask,
+                        onAddSubTask: onAddSubTask,
+                        onDeleteTask: onDeleteTask,
+                        viewType, loggedInUserType, onUpdateTask, onEditTask, onAIUpdate, onShowNotes, onShowDetails, onClientComm, onToggleClientDeliverable, onToggleExpansion, isTrialExpired
+                    })
+                ))
+            )
+        );
+    };
+</script>
+

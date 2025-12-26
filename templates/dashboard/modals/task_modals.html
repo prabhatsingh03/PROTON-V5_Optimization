@@ -1,0 +1,460 @@
+<script type="text/babel">
+        const SimpleMarkdownRenderer = ({ text }) => {
+            let html = '';
+            let in_list = false;
+            const lines = text.split('\n');
+            const processInlineFormatting = (line) => {
+                return line
+                    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+                    .replace(/\*(.*?)\*/g, '<em>$1</em>');
+            };
+            for (const line of lines) {
+                if (line.startsWith('* ') || line.startsWith('- ')) {
+                    if (!in_list) {
+                        html += '<ul>';
+                        in_list = true;
+                    }
+                    html += `<li>${processInlineFormatting(line.substring(2))}</li>`;
+                } else {
+                    if (in_list) {
+                        html += '</ul>';
+                        in_list = false;
+                    }
+                    if (line.startsWith('### ')) {
+                        html += `<h3>${processInlineFormatting(line.substring(4))}</h3>`;
+                    } else if (line.trim() !== '') {
+                        html += `<p>${processInlineFormatting(line)}</p>`;
+                    }
+                }
+            }
+            if (in_list) {
+                html += '</ul>';
+            }
+            return React.createElement('div', { className: 'prose', dangerouslySetInnerHTML: { __html: html } });
+        };
+        // Retry mechanism for API calls
+        const retryApiCall = async (apiCall, maxRetries = 3, baseDelay = 1000, onRetry = null) => {
+            for (let attempt = 1; attempt <= maxRetries; attempt++) {
+                try {
+                    const response = await apiCall();
+                    return response;
+                } catch (error) {
+                    console.error(`API call attempt ${attempt} failed:`, error);
+                    
+                    // Check if it's a retryable error (503, 502, 504, network errors)
+                    const isRetryableError = error.message.includes('503') || 
+                                           error.message.includes('502') || 
+                                           error.message.includes('504') || 
+                                           error.message.includes('network') ||
+                                           error.message.includes('fetch') ||
+                                           error.message.includes('timeout');
+                    
+                    if (attempt === maxRetries || !isRetryableError) {
+                        throw error;
+                    }
+                    
+                    // Show user-friendly message for retryable errors
+                    if (attempt === 1) {
+                        throw new Error("Hold on, there's a problem with the network. Retrying...");
+                    }
+                    
+                    // Call retry callback if provided
+                    if (onRetry) {
+                        onRetry(attempt, maxRetries);
+                    }
+                    
+                    // Exponential backoff delay
+                    const delay = baseDelay * Math.pow(2, attempt - 1);
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                }
+            }
+        };
+
+        const TaskDetailsModal = ({ task, onClose, loggedInUserType }) => {
+            const { useEffect, useRef } = React;
+            const modalContentRef = useRef(null);
+
+            useEffect(() => {
+                const handleClickOutside = (event) => {
+                    if (modalContentRef.current && !modalContentRef.current.contains(event.target)) {
+                        onClose();
+                    }
+                };
+                document.addEventListener("mousedown", handleClickOutside);
+                return () => document.removeEventListener("mousedown", handleClickOutside);
+            }, [onClose]);
+
+            // Filter for notes that have a string in the 'text' property to avoid rendering errors
+            const validNotes = Array.isArray(task.notes) ? task.notes.filter(n => typeof n.text === 'string' && n.text) : [];
+
+            return React.createElement("div", { className: "fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center p-4 z-50 backdrop-blur-sm" },
+                React.createElement("div", { ref: modalContentRef, className: "modal-content p-6 rounded-xl shadow-xl w-full max-w-lg max-h-[90vh] flex flex-col" },
+                    React.createElement("h2", { className: "text-xl font-semibold mb-4 text-blue-600 border-b pb-2" }, "Details for: ", React.createElement("span", { className: "font-bold" }, task.taskName)),
+                    React.createElement("div", { className: "space-y-4 overflow-y-auto" },
+                        // Details Section
+                        React.createElement("div", null,
+                            React.createElement("h3", { className: "font-semibold text-slate-700 mb-2" }, "Key Info"),
+                            React.createElement("div", { className: "text-sm space-y-1" },
+                                React.createElement("p", { className: "text-slate-600" }, "Predecessors: ", React.createElement("strong", { className: "text-slate-800 font-medium" }, task.predecessorString || 'None')),
+                                React.createElement("p", { className: "text-slate-600" }, "Weather Delay: ", React.createElement("strong", { className: "text-slate-800 font-medium" }, task.delayWeatherDays || 0, " days")),
+                                React.createElement("p", { className: "text-slate-600" }, "Contractor Delay: ", React.createElement("strong", { className: "text-slate-800 font-medium" }, task.delayContractorDays || 0, " days")),
+                                React.createElement("p", { className: "text-slate-600" }, "Client Delay: ", React.createElement("strong", { className: "text-slate-800 font-medium" }, task.delayClientDays || 0, " days"))
+                            )
+                        ),
+                        // Notes Section (Conditional)
+                        loggedInUserType !== 'client' && React.createElement("div", null,
+                            React.createElement("h3", { className: "font-semibold text-slate-700 mb-2" }, "Notes"),
+                            validNotes.length > 0 ?
+                                React.createElement("ul", { className: "list-none space-y-2 max-h-48 overflow-y-auto pr-2" },
+                                    validNotes.map((note, index) =>
+                                        React.createElement("li", { key: index, className: "text-xs bg-slate-50 p-2 rounded-md border border-slate-200" },
+                                            React.createElement("span", { className: "block font-medium text-slate-500" }, `[${new Date(note.timestamp).toLocaleString()}] [${note.source}]`),
+                                            React.createElement("p", { className: "text-slate-800 mt-1 whitespace-pre-wrap" }, note.text)
+                                        )
+                                    )
+                                ) : React.createElement("p", { className: "italic text-sm text-slate-500" }, "No valid notes for this task.")
+                        )
+                    ),
+                    React.createElement("div", { className: "flex justify-end pt-6 mt-auto" },
+                        React.createElement("button", { type: "button", onClick: onClose, className: "px-4 py-2 bg-slate-200 hover:bg-slate-300 rounded-md text-slate-700" }, "Close")
+                    )
+                )
+            );
+        };
+
+        const EditTaskModal = ({ task, onClose, onSave, isTrialExpired }) => {
+            const { useState, useEffect, useRef } = React;
+            const [formData, setFormData] = useState({ ...task });
+            const modalContentRef = useRef(null);
+            const hasSubtasks = task.subtasks && task.subtasks.length > 0;
+            useEffect(() => {
+                const handleClickOutside = (event) => {
+                    if (modalContentRef.current && !modalContentRef.current.contains(event.target)) {
+                        onClose();
+                    }
+                };
+                document.addEventListener("mousedown", handleClickOutside);
+                return () => {
+                    document.removeEventListener("mousedown", handleClickOutside);
+                };
+            }, [onClose]);
+            useEffect(() => {
+                setFormData({ ...task, weightage: task.weightage ?? 0 });
+            }, [task]);
+            const handleChange = (e) => {
+                const { name, value, type, checked } = e.target;
+                const newValue = type === 'checkbox' ? checked : (type === 'number' ? parseFloat(value) || 0 : value);
+                setFormData(prev => {
+                    const updatedData = { ...prev, [name]: newValue };
+                    if (name === 'progress') {
+                        const progressValue = Number(newValue);
+                        if (progressValue > 0 && progressValue < 100) {
+                            updatedData.status = 'In Progress';
+                        } else if (progressValue >= 100) {
+                            updatedData.status = 'Completed';
+                        } else if (progressValue <= 0) {
+                            updatedData.status = 'Not Started';
+                        }
+                    }
+                    if (name === 'status' && newValue === 'Completed') {
+                        updatedData.progress = 100;
+                    }
+                    if (name === 'status' && newValue === 'Not Started') {
+                        updatedData.progress = 0;
+                    }
+                    return updatedData;
+                });
+            };
+            const handleSubmit = (e) => {
+                e.preventDefault();
+                let finalData = {
+                    ...formData,
+                    progress: Math.max(0, Math.min(100, Number(formData.progress) || 0)),
+                    plannedStartDate: formData.plannedStartDate || null,
+                    plannedEndDate: formData.plannedEndDate || null,
+                    actualStartDate: formData.actualStartDate || null,
+                    actualEndDate: formData.actualEndDate || null,
+                    delayWeatherDays: Number(formData.delayWeatherDays) || 0,
+                    delayContractorDays: Number(formData.delayContractorDays) || 0,
+                    delayClientDays: Number(formData.delayClientDays) || 0,
+                    weightage: Number(formData.weightage) ?? 0
+                };
+                if (finalData.progress === 100) {
+                    finalData.status = 'Completed';
+                }
+                onSave(finalData);
+            };
+            return (React.createElement("div", { className: "fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center p-4 z-50 backdrop-blur-sm" },
+                React.createElement("div", { ref: modalContentRef, className: "modal-content p-6 rounded-xl shadow-2xl w-full max-w-md sm:max-w-lg max-h-[90vh] overflow-y-auto" },
+                    React.createElement("h2", { className: "text-xl sm:text-2xl font-semibold mb-6 text-sky-600" }, "Edit Task: ", React.createElement("span", { className: "font-bold" }, task.taskName)),
+                    React.createElement("form", { onSubmit: handleSubmit, className: "space-y-4" },
+                        React.createElement("div", { className: "grid grid-cols-1 sm:grid-cols-2 gap-4" },
+                            React.createElement("div", null,
+                                React.createElement("label", { htmlFor: "plannedStartDate", className: "modal-label block text-sm font-medium mb-1" }, "Planned Start Date"),
+                                React.createElement("input", { type: "date", name: "plannedStartDate", id: "plannedStartDate", value: formatDateForInput(formData.plannedStartDate), onChange: handleChange, className: "w-full p-2 modal-input rounded-md" })
+                            ),
+                            React.createElement("div", null,
+                                React.createElement("label", { htmlFor: "plannedEndDate", className: "modal-label block text-sm font-medium mb-1" }, "Planned End Date"),
+                                React.createElement("input", { type: "date", name: "plannedEndDate", id: "plannedEndDate", value: formatDateForInput(formData.plannedEndDate), onChange: handleChange, className: "w-full p-2 modal-input rounded-md" })
+                            )
+                        ),
+                        React.createElement("div", { className: "grid grid-cols-1 sm:grid-cols-2 gap-4" },
+                            React.createElement("div", null,
+                                React.createElement("label", { htmlFor: "actualStartDate", className: "modal-label block text-sm font-medium mb-1" }, "Actual Start Date"),
+                                React.createElement("input", { type: "date", name: "actualStartDate", id: "actualStartDate", value: formatDateForInput(formData.actualStartDate), onChange: handleChange, className: "w-full p-2 modal-input rounded-md" })
+                            ),
+                            React.createElement("div", null,
+                                React.createElement("label", { htmlFor: "actualEndDate", className: "modal-label block text-sm font-medium mb-1" }, "Actual End Date"),
+                                React.createElement("input", { type: "date", name: "actualEndDate", id: "actualEndDate", value: formatDateForInput(formData.actualEndDate), onChange: handleChange, className: "w-full p-2 modal-input rounded-md" }))
+                        ),
+                        React.createElement("div", { className: "grid grid-cols-1 sm:grid-cols-2 gap-4" },
+                            React.createElement("div", null,
+                                React.createElement("label", { htmlFor: "progress", className: "modal-label block text-sm font-medium mb-1" }, "Progress (%)"),
+                                hasSubtasks && React.createElement("p", { className: "text-xs text-slate-500 mb-1" }, "Calculated from subtasks."),
+                                React.createElement("input", { type: "number", name: "progress", id: "progress", value: formData.progress || 0, onChange: handleChange, min: "0", max: "100", className: "w-full p-2 modal-input rounded-md", disabled: hasSubtasks })
+                            ),
+                            React.createElement("div", null,
+                                React.createElement("label", { htmlFor: "weightage", className: "modal-label block text-sm font-medium mb-1" }, "Weightage (%)"),
+                                React.createElement("input", { type: "number", name: "weightage", id: "weightage", value: formData.weightage ?? 0, onChange: handleChange, min: "0", step: "any", className: "w-full p-2 modal-input rounded-md" })
+                            )
+                        ),
+                        React.createElement("div", null,
+                            React.createElement("label", { htmlFor: "status", className: "modal-label block text-sm font-medium mb-1" }, "Status"),
+                            React.createElement("select", { name: "status", id: "status", value: formData.status, onChange: handleChange, className: "w-full p-2 modal-input rounded-md" }, TASK_STATUSES.map(s => React.createElement("option", { key: s, value: s }, s)))
+                        ),
+                        React.createElement("div", { className: "grid grid-cols-1 sm:grid-cols-3 gap-4" },
+                            React.createElement("div", null, React.createElement("label", { htmlFor: "delayWeatherDays", className: "modal-label block text-sm font-medium mb-1" }, "Weather Delay"), React.createElement("input", { type: "number", name: "delayWeatherDays", id: "delayWeatherDays", value: formData.delayWeatherDays || 0, onChange: handleChange, min: "0", className: "w-full p-2 modal-input rounded-md" })),
+                            React.createElement("div", null, React.createElement("label", { htmlFor: "delayContractorDays", className: "modal-label block text-sm font-medium mb-1" }, "Contractor Delay"), React.createElement("input", { type: "number", name: "delayContractorDays", id: "delayContractorDays", value: formData.delayContractorDays || 0, onChange: handleChange, min: "0", className: "w-full p-2 modal-input rounded-md" })),
+                            React.createElement("div", null, React.createElement("label", { htmlFor: "delayClientDays", className: "modal-label block text-sm font-medium mb-1" }, "Client Delay"), React.createElement("input", { type: "number", name: "delayClientDays", id: "delayClientDays", value: formData.delayClientDays || 0, onChange: handleChange, min: "0", className: "w-full p-2 modal-input rounded-md" }))
+                        ),
+                        React.createElement("div", null, React.createElement("label", { htmlFor: "predecessorString", className: "modal-label block text-sm font-medium mb-1" }, "Predecessors"), React.createElement("input", { type: "text", name: "predecessorString", id: "predecessorString", value: formData.predecessorString || '', onChange: handleChange, className: "w-full p-2 modal-input rounded-md", placeholder: "e.g., 17, 3FS+4d" })),
+                        React.createElement("div", { className: "flex items-center space-x-4" }, React.createElement("label", { htmlFor: "isCritical", className: "flex items-center text-sm font-medium modal-label" }, React.createElement("input", { type: "checkbox", name: "isCritical", id: "isCritical", checked: !!formData.isCritical, onChange: handleChange, className: "h-4 w-4 text-red-600 border-slate-300 rounded focus:ring-red-500 mr-2" }), "Mark as Critical"), React.createElement("label", { htmlFor: "isClientDeliverable", className: "flex items-center text-sm font-medium modal-label" }, React.createElement("input", { type: "checkbox", name: "isClientDeliverable", id: "isClientDeliverable", checked: !!formData.isClientDeliverable, onChange: handleChange, className: "h-4 w-4 text-sky-600 border-slate-300 rounded focus:ring-sky-500 mr-2" }), "Client Deliverable")),
+                        React.createElement("div", { className: "flex justify-end space-x-3 pt-4" }, React.createElement("button", { type: "button", onClick: onClose, className: "px-4 py-2 rounded-md bg-slate-200 hover:bg-slate-300 text-slate-700 transition-colors" }, "Cancel"), React.createElement("button", { type: "submit", disabled: isTrialExpired, title: isTrialExpired ? 'Trial expired. Upgrade to continue.' : undefined, className: `px-4 py-2 rounded-md bg-sky-600 hover:bg-sky-700 text-white font-semibold transition-colors flex items-center ${isTrialExpired ? 'opacity-50 cursor-not-allowed' : ''}` }, React.createElement(Save, { size: 18, className: "mr-2" }), " Save Changes"))))));
+        };
+        const AIUpdateModal = ({ task, allTasks, loggedInUserType, onClose, onApplySuggestion, setAppError }) => {
+            const { useState, useEffect, useRef } = React;
+            const [suggestedProgress, setSuggestedProgress] = useState(task.progress || 0);
+            const [suggestedStatus, setSuggestedStatus] = useState(task.status || "Not Started");
+            const [riskMitigationPairs, setRiskMitigationPairs] = useState([]);
+            const [isGeneratingRiskAssessment, setIsGeneratingRiskAssessment] = useState(false);
+            const [generationError, setGenerationError] = useState(null);
+            const [retryStatus, setRetryStatus] = useState(null);
+            const modalContentRef = useRef(null);
+            useEffect(() => {
+                const handleClickOutside = (event) => {
+                    if (modalContentRef.current && !modalContentRef.current.contains(event.target)) {
+                        onClose();
+                    }
+                };
+                document.addEventListener("mousedown", handleClickOutside);
+                return () => {
+                    document.removeEventListener("mousedown", handleClickOutside);
+                };
+            }, [onClose]);
+            const handleGenerateRiskAssessment = async () => {
+                setIsGeneratingRiskAssessment(true);
+                setGenerationError(null);
+                setRiskMitigationPairs([]);
+                setAppError(null);
+                const allTasksSummary = allTasks.map(t => JSON.stringify({ wbs: t.wbs, name: t.taskName, status: t.status, predecessors: t.predecessorString })).join('\n');
+                const prompt = `
+                Full Project Schedule Summary (WBS, Name, Status, Predecessors):
+                ${allTasksSummary}
+                
+                ---
+                Focus Task for Risk Assessment: "${task.taskName}" (WBS: ${task.wbs})
+                Current Status: ${task.status}
+                Current Progress: ${task.progress || 0}%
+                Planned Start: ${task.plannedStartDate}
+                Planned End: ${task.plannedEndDate}
+                Predecessors: ${task.predecessorString || 'None'}
+                Delays: Weather: ${task.delayWeatherDays || 0}d, Contractor: ${task.delayContractorDays || 0}d, Client: ${task.delayClientDays || 0}d
+
+                Based on the full project schedule context and the specific details of the focus task, please identify potential risks and suggest a corresponding mitigation strategy for each. Your assessment MUST consider how delays or issues in predecessor tasks impact this focus task, and how this task's status could impact its successors.
+
+                Return your response ONLY as a valid JSON array of objects. Each object must have two keys: "risk" and "mitigation".
+                Example format:
+                [
+                  {"risk": "The critical predecessor 'Task A' is delayed, which will directly delay the start of this task.", "mitigation": "Immediately follow up with the team for 'Task A' to get a revised completion date. Evaluate re-sequencing non-dependent sub-tasks to begin earlier."},
+                  {"risk": "This task has a long duration and no progress, indicating a potential bottleneck.", "mitigation": "Break down the task into smaller, manageable sub-tasks with weekly check-ins to monitor progress more closely."}
+                ]
+                Do not include any text, markdown, or formatting outside of the JSON array.
+                `;
+                try {
+                    let chatHistory = [{ role: "user", parts: [{ text: prompt }] }];
+                    
+                    const result = await retryApiCall(async () => {
+                        const response = await makeAuthenticatedRequest('/api/gemini/generate-content', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ contents: chatHistory, use_chatbot_key: false })
+                        });
+                        if (!response.ok) { 
+                            throw new Error(`API request failed with status ${response.status}`); 
+                        }
+                        return await response.json();
+                    }, 3, 1000, (attempt, maxRetries) => {
+                        setRetryStatus(`Retrying... (${attempt}/${maxRetries})`);
+                    });
+                    
+                    let responseText = result.candidates[0].content.parts[0].text;
+                    responseText = responseText.trim().replace(/^```json\s*/, '').replace(/```$/, '');
+                    try {
+                        const parsedData = JSON.parse(responseText);
+                        if (Array.isArray(parsedData)) {
+                            setRiskMitigationPairs(parsedData);
+                        } else {
+                            throw new Error("AI did not return a JSON array.");
+                        }
+                    } catch (parseError) {
+                        console.error("JSON Parsing Error:", parseError, "Raw Response:", responseText);
+                        setGenerationError("The AI response was not in the correct format. Please try again.");
+                    }
+                } catch (error) {
+                    console.error("Error calling Gemini API:", error);
+                    setRetryStatus(null);
+                    setGenerationError(`Failed to generate risk assessment: ${error.message}.`);
+                } finally {
+                    setIsGeneratingRiskAssessment(false);
+                }
+            };
+            const handleApplySuggestions = () => {
+                const aiAssessmentNote = riskMitigationPairs.length > 0
+                    ? `AI Risk Assessment & Mitigation:\n\n` + riskMitigationPairs.map(p => `Risk: ${p.risk}\nMitigation: ${p.mitigation}`).join('\n\n')
+                    : 'No AI suggestions were applied.';
+
+                // Create a new note entry instead of replacing existing notes
+                const newNote = {
+                    text: aiAssessmentNote,
+                    timestamp: new Date().toISOString(),
+                    source: 'AI Assessment'
+                };
+
+                // Append to existing notes array
+                const updatedNotes = [...(task.notes || []), newNote];
+
+                onApplySuggestion(task.id, {
+                    progress: task.progress,
+                    status: task.status,
+                    notes: updatedNotes
+                });
+                onClose();
+            };
+            return (
+                React.createElement("div", { className: "fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center p-4 z-50 backdrop-blur-sm" },
+                    React.createElement("div", { ref: modalContentRef, className: "modal-content p-6 rounded-xl shadow-xl w-full max-w-lg sm:max-w-2xl max-h-[90vh] flex flex-col" },
+                        React.createElement("h2", { className: "text-xl sm:text-2xl font-semibold mb-4 text-purple-600 flex items-center flex-shrink-0" },
+                            React.createElement(Zap, { size: 22, className: "mr-2" }),
+                            `AI Assessment for "${task.taskName}"`
+                        ),
+                        React.createElement("div", { className: "space-y-4 overflow-y-auto pr-2 flex-grow" },
+                            React.createElement("div", { className: "grid grid-cols-1 sm:grid-cols-2 gap-4" },
+                                React.createElement("div", null,
+                                    React.createElement("label", { className: "modal-label block text-sm font-medium mb-1" }, "Current Progress (%)"),
+                                    React.createElement("input", {
+                                        type: "text",
+                                        value: suggestedProgress,
+                                        className: "w-full p-2 modal-input rounded-md",
+                                        disabled: true
+                                    })
+                                ),
+                                React.createElement("div", null,
+                                    React.createElement("label", { className: "modal-label block text-sm font-medium mb-1" }, "Current Status"),
+                                    React.createElement("input", {
+                                        type: "text",
+                                        value: suggestedStatus,
+                                        className: "w-full p-2 modal-input rounded-md",
+                                        disabled: true
+                                    })
+                                )
+                            ),
+                            React.createElement("button", {
+                                type: "button",
+                                onClick: handleGenerateRiskAssessment,
+                                disabled: isGeneratingRiskAssessment,
+                                className: "w-full mt-2 px-4 py-2 bg-sky-500 hover:bg-sky-600 text-white font-semibold rounded-md flex items-center justify-center transition-colors disabled:opacity-50"
+                            },
+                                isGeneratingRiskAssessment ? React.createElement("div", { className: "ai-spinner" }) : React.createElement(LightbulbIcon, { size: 18, className: "mr-2" }),
+                                isGeneratingRiskAssessment ? (retryStatus || "Generating Insights...") : "Generate Risk Assessment & Mitigation Ideas"
+                            ),
+                            generationError && React.createElement("p", { className: "text-sm text-red-600 bg-red-50 p-2 rounded-md" }, generationError),
+                            (riskMitigationPairs.length > 0) && React.createElement("div", { className: "mt-4" },
+                                React.createElement("table", { className: "min-w-full divide-y divide-slate-200 border border-slate-200 rounded-lg" },
+                                    React.createElement("thead", { className: "bg-slate-50" },
+                                        React.createElement("tr", null,
+                                            React.createElement("th", { className: "px-4 py-2 text-left text-sm font-semibold text-slate-700 w-1/2" }, "Risk Assessment"),
+                                            React.createElement("th", { className: "px-4 py-2 text-left text-sm font-semibold text-slate-700 w-1/2" }, "Mitigation Idea")
+                                        )
+                                    ),
+                                    React.createElement("tbody", { className: "divide-y divide-slate-200" },
+                                        riskMitigationPairs.map((pair, index) => React.createElement("tr", { key: index },
+                                            React.createElement("td", { className: "px-4 py-3 text-sm text-slate-600 align-top" }, pair.risk),
+                                            React.createElement("td", { className: "px-4 py-3 text-sm text-slate-600 align-top border-l border-slate-200" }, pair.mitigation)
+                                        ))
+                                    )
+                                )
+                            )
+                        ),
+                        React.createElement("div", { className: "flex justify-end gap-3 pt-6 flex-shrink-0" },
+                            React.createElement("button", { type: "button", onClick: onClose, className: "px-4 py-2 bg-slate-200 hover:bg-slate-300 rounded-md text-slate-700" }, "Close"),
+                            loggedInUserType !== 'client' && React.createElement("button", { type: "button", onClick: handleApplySuggestions, disabled: riskMitigationPairs.length === 0, className: "px-4 py-2 bg-purple-600 hover:bg-purple-700 rounded-md text-white font-semibold flex items-center disabled:opacity-50" }, React.createElement(CheckCircle, { size: 18, className: "mr-2" }), "Apply to Notes")
+                        )
+                    )
+                )
+            );
+        };
+        const NotesModal = ({ task, loggedInUser, onClose, onAddNote }) => {
+            const { useState, useEffect, useRef } = React;
+            const [noteText, setNoteText] = useState("");
+            const modalContentRef = useRef(null);
+            const loggedInUserType = loggedInUser.userType;
+
+            useEffect(() => {
+                const handleClickOutside = (event) => {
+                    if (modalContentRef.current && !modalContentRef.current.contains(event.target)) {
+                        onClose();
+                    }
+                };
+                document.addEventListener("mousedown", handleClickOutside);
+                return () => {
+                    document.removeEventListener("mousedown", handleClickOutside);
+                };
+            }, [onClose]);
+
+            // Filter notes to ensure 'n.text' is a string before rendering.
+            const validNotes = Array.isArray(task.notes) ? task.notes.filter(n => typeof n.text === 'string' && n.text) : [];
+
+            return (
+                React.createElement("div", { className: "fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50 backdrop-blur-sm" },
+                    React.createElement("div", { ref: modalContentRef, className: "modal-content p-6 rounded-xl shadow-xl w-full max-w-md max-h-[90vh] overflow-y-auto" },
+                        React.createElement("h2", { className: "text-xl font-semibold mb-4 text-green-600 flex items-center" }, React.createElement(MessageSquareIcon, { size: 20, className: "mr-2" }), loggedInUserType !== 'client' ? `Notes for "${task.taskName}"` : `View Notes for "${task.taskName}"`),
+                        React.createElement("div", { className: "space-y-4" },
+                            React.createElement("div", null,
+                                React.createElement("h3", { className: "font-medium text-slate-800 mb-2 text-sm" }, "Existing Notes"),
+                                validNotes.length > 0 ? (
+                                    React.createElement("ul", { className: "list-none space-y-2 max-h-48 overflow-y-auto pr-2" },
+                                        validNotes.slice().reverse().map((n, idx) => (
+                                            React.createElement("li", { key: idx, className: "mb-1 p-2.5 bg-slate-50 rounded-md border border-slate-200 text-xs" },
+                                                React.createElement("span", { className: "block font-medium text-slate-700" }, `${n.source} (`, new Date(n.timestamp).toLocaleString(), ")"),
+                                                React.createElement("p", { className: "text-slate-600 mt-0.5 whitespace-pre-wrap" }, n.text)
+                                            )
+                                        ))
+                                    )
+                                ) : (React.createElement("p", { className: "text-sm italic text-slate-500" }, "No valid notes to display."))
+                            ),
+                            loggedInUserType !== 'client' && (
+                                React.createElement("div", null,
+                                    React.createElement("label", { htmlFor: "noteText", className: "modal-label block text-sm font-medium mb-1" }, "New Note"),
+                                    React.createElement("textarea", { id: "noteText", rows: "3", className: "w-full p-2 modal-input rounded-md", value: noteText, onChange: (e) => setNoteText(e.target.value) })
+                                )
+                            )
+                        ),
+                        React.createElement("div", { className: "flex justify-end gap-3 pt-6" },
+                            React.createElement("button", { type: "button", onClick: onClose, className: "px-4 py-2 bg-slate-200 hover:bg-slate-300 rounded-md text-slate-700" }, "Close"),
+                            loggedInUserType !== 'client' && (React.createElement("button", { type: "button", onClick: () => { if (noteText.trim()) { onAddNote(task.id, noteText.trim()); onClose(); } }, className: "px-4 py-2 bg-green-600 hover:bg-green-700 rounded-md text-white font-semibold flex items-center" }, React.createElement(PlusCircle, { size: 18, className: "mr-2" }), "Add Note"))
+                        )
+                    )
+                )
+            );
+        };
+</script>

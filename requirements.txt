@@ -1,0 +1,13 @@
+flask-jwt-extended
+Flask
+pandas
+deep-translator
+razorpay
+reportlab
+Flask-Limiter
+Flask-CORS
+cryptography
+python-dotenv
+bleach
+google-genai
+mysql-connector-python

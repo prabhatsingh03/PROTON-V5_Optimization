@@ -1,0 +1,1210 @@
+<script type="text/babel">
+    const WorkspaceApp = ({ projectId }) => {
+        const { useState, useEffect, useCallback, useMemo } = React;
+
+        // Copy ALL state from main_app.html
+        const [loggedInUser, setLoggedInUser] = useState(null);
+        const [isLoading, setIsLoading] = useState(true);
+        const [appError, setAppError] = useState(null);
+        const [notification, setNotification] = useState(null);
+        const [projects, setProjects] = useState([]);
+        const [selectedProject, setSelectedProject] = useState('');
+        const [tasks, setTasks] = useState([]);
+        const [pendingAdmins, setPendingAdmins] = useState([]);
+        const [currentView, setCurrentView] = useState('admin');
+        const [showEditModal, setShowEditModal] = useState(false);
+        const [showAIModal, setShowAIModal] = useState(false);
+        const [showNotesModal, setShowNotesModal] = useState(false);
+        const [showClientCommModal, setShowClientCommModal] = useState(false);
+        const [showAddProjectModal, setShowAddProjectModal] = useState(false);
+        const [showAddTaskModal, setShowAddTaskModal] = useState(false);
+        const [showDetailsModal, setShowDetailsModal] = useState(false);
+        const [showActivityLogModal, setShowActivityLogModal] = useState(false);
+        const [showCSVImportModal, setShowCSVImportModal] = useState(false);
+        const [showUserManagementModal, setShowUserManagementModal] = useState(false);
+        const [showSubscriptionManagement, setShowSubscriptionManagement] = useState(false);
+        const [subscriptionData, setSubscriptionData] = useState(null);
+        const [trialStatus, setTrialStatus] = useState(null);
+        const [isTrialBannerDismissed, setIsTrialBannerDismissed] = useState(false);
+        const isTrialExpired = !!(trialStatus && trialStatus.is_trial && trialStatus.is_expired);
+        const [selectedTask, setSelectedTask] = useState(null);
+        const [addTaskContext, setAddTaskContext] = useState(null);
+        const [searchTerm, setSearchTerm] = useState('');
+        const [startDateFilter, setStartDateFilter] = useState('');
+        const [endDateFilter, setEndDateFilter] = useState('');
+        const [sortBy, setSortBy] = useState({ field: 'wbs', order: 'asc' });
+        const [areAllExpanded, setAreAllExpanded] = useState(true);
+        const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+        const [dashboardData, setDashboardData] = useState(null);
+        const [showNotificationDropdown, setShowNotificationDropdown] = useState(false);
+        const [showTutorial, setShowTutorial] = useState(false);
+
+        // NEW: Tab state - initialize from URL
+        const getInitialTab = () => {
+            const urlParams = new URLSearchParams(window.location.search);
+            const hashTab = window.location.hash.replace('#', '');
+            const tabParam = urlParams.get('tab') || hashTab;
+            const validTabs = ['overview', 'wbs', 'gantt', 'ai-insights', 'documents', 'communication', 'team-permissions'];
+            return validTabs.includes(tabParam) ? tabParam : 'overview';
+        };
+
+        const [activeTab, setActiveTab] = useState(getInitialTab());
+
+
+        const [isTabLoading, setIsTabLoading] = useState(false);
+
+        // Tab switching handler
+        const handleTabChange = useCallback((tabName) => {
+            setIsTabLoading(true);
+            setActiveTab(tabName);
+            // Update URL without page reload
+            const url = new URL(window.location);
+            url.searchParams.set('tab', tabName);
+            window.history.replaceState({}, '', url);
+
+            // Short timeout to allow skeleton to show and smooth the transition
+            setTimeout(() => setIsTabLoading(false), 600);
+        }, []);
+
+        // Listen for tab change events from vanilla JS
+        useEffect(() => {
+            const handleTabChangeEvent = (event) => {
+                if (event.detail && event.detail.tab) {
+                    handleTabChange(event.detail.tab);
+                }
+            };
+            window.addEventListener('workspaceTabChange', handleTabChangeEvent);
+            return () => window.removeEventListener('workspaceTabChange', handleTabChangeEvent);
+        }, [handleTabChange]);
+
+        // Initialize tab from URL on mount and update DOM
+        useEffect(() => {
+            const initialTab = getInitialTab();
+            if (initialTab !== activeTab) {
+                setActiveTab(initialTab);
+            }
+            // Update DOM to reflect active tab
+            const updateTabButtons = () => {
+                document.querySelectorAll('.workspace-tab').forEach(tab => {
+                    tab.classList.remove('active');
+                });
+                const activeTabButton = document.querySelector(`[data-tab="${initialTab}"]`);
+                if (activeTabButton) {
+                    activeTabButton.classList.add('active');
+                }
+            };
+            // Small delay to ensure DOM is ready
+            setTimeout(updateTabButtons, 100);
+        }, []);
+
+        // Skeleton Components
+        const OverviewSkeleton = () => React.createElement('div', { className: 'animate-pulse space-y-6' },
+            React.createElement('div', { className: 'grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4' },
+                Array(4).fill(0).map((_, i) => React.createElement('div', { key: i, className: 'bg-white rounded-xl p-6 h-32' }))
+            ),
+            React.createElement('div', { className: 'grid grid-cols-1 lg:grid-cols-3 gap-6' },
+                React.createElement('div', { className: 'lg:col-span-2 bg-white rounded-xl p-6 h-96' }),
+                React.createElement('div', { className: 'bg-white rounded-xl p-6 h-96' })
+            )
+        );
+
+        const WBSSkeleton = () => React.createElement('div', { className: 'animate-pulse space-y-4' },
+            React.createElement('div', { className: 'flex justify-between items-center mb-4' },
+                React.createElement('div', { className: 'h-8 bg-slate-200 rounded w-1/3' }),
+                React.createElement('div', { className: 'h-8 bg-slate-200 rounded w-1/4' })
+            ),
+            React.createElement('div', { className: 'bg-white rounded-xl p-4' },
+                Array(10).fill(0).map((_, i) => React.createElement('div', { key: i, className: 'h-10 bg-slate-100 rounded mb-2' }))
+            )
+        );
+
+        const GanttSkeleton = () => React.createElement('div', { className: 'animate-pulse bg-white rounded-xl p-4 h-screen' },
+            React.createElement('div', { className: 'flex space-x-4 mb-4' },
+                React.createElement('div', { className: 'h-8 bg-slate-200 rounded w-32' }),
+                React.createElement('div', { className: 'h-8 bg-slate-200 rounded w-32' })
+            ),
+            React.createElement('div', { className: 'space-y-4' },
+                Array(15).fill(0).map((_, i) => React.createElement('div', { key: i, className: 'flex space-x-2' },
+                    React.createElement('div', { className: 'h-6 bg-slate-100 rounded w-1/4' }),
+                    React.createElement('div', { className: 'h-6 bg-slate-100 rounded w-3/4' })
+                ))
+            )
+        );
+
+
+
+
+        // Copy ALL helper functions from main_app.html
+        const getRoleBadge = (role) => {
+            const badges = {
+                'super_admin': { label: 'Super Admin', color: 'bg-purple-100 text-purple-700' },
+                'org_admin': { label: 'Org Admin', color: 'bg-blue-100 text-blue-700' },
+                'org_user': { label: 'User', color: 'bg-green-100 text-green-700' },
+                'client': { label: 'Client', color: 'bg-slate-100 text-slate-700' }
+            };
+            const badge = badges[role] || badges['org_user'];
+            return React.createElement('span', {
+                className: `px-2 py-1 text-xs font-semibold rounded-full ${badge.color}`
+            }, badge.label);
+        };
+
+        const getWelcomeMessage = (role) => {
+            const messages = {
+                'super_admin': 'Welcome, Super Admin! You have full system access.',
+                'org_admin': 'Welcome, Organization Admin! Manage your team and projects.',
+                'org_user': 'Welcome! View and update your assigned tasks.',
+                'client': 'Welcome! View your project deliverables.'
+            };
+            return messages[role] || 'Welcome to PROTON!';
+        };
+
+        const handleAPIError = (response, data) => {
+            if (response && response.status === 403) {
+                const msg = (loggedInUser && loggedInUser.role === 'org_user')
+                    ? 'This action requires Org Admin privileges.'
+                    : (data && data.message) || 'You do not have permission to perform this action.';
+                setAppError(msg);
+                return true;
+            }
+            return false;
+        };
+
+        // Copy ALL modal handlers from main_app.html
+        const openEditModal = (task) => { setSelectedTask(task); setShowEditModal(true); };
+        const openAIModal = (task) => { setSelectedTask(task); setShowAIModal(true); };
+        const openNotesModal = (task) => { setSelectedTask(task); setShowNotesModal(true); };
+        const openClientCommModal = (task) => {
+            if (loggedInUser && loggedInUser.userType !== 'client') {
+                const unreadCommentsExist = task.clientComments && task.clientComments.some(c => c.clientStatus && c.adminSeen === false);
+                if (unreadCommentsExist) {
+                    const updatedComments = task.clientComments.map(c =>
+                        (c.clientStatus && c.adminSeen === false) ? { ...c, adminSeen: true } : c
+                    );
+                    handleUpdateTask(task.id, { clientComments: updatedComments });
+                }
+            }
+            setSelectedTask(task);
+            setShowClientCommModal(true);
+        };
+        const openDetailsModal = (task) => { setSelectedTask(task); setShowDetailsModal(true); };
+        const openAddTaskModal = (task, mode) => { setAddTaskContext({ task, mode }); setShowAddTaskModal(true); };
+
+        // Copy ALL authentication logic from main_app.html (lines 183-241)
+        useEffect(() => {
+            const accessToken = localStorage.getItem('access_token');
+            const userData = localStorage.getItem('user_data');
+
+            if (accessToken && userData) {
+                try {
+                    const authData = JSON.parse(userData);
+                    let userRole = 'org_user';
+                    let orgId = null;
+                    let plan = null;
+
+                    try {
+                        const payload = accessToken.split('.')[1];
+                        const decodedPayload = JSON.parse(decodeBase64Url(payload));
+                        userRole = decodedPayload.role || 'org_user';
+                        orgId = decodedPayload.org_id || null;
+                        plan = decodedPayload.plan || null;
+                    } catch (jwtError) {
+                        console.warn('Failed to parse JWT token:', jwtError);
+                        if (authData.userType === 'admin') {
+                            userRole = 'org_admin';
+                        }
+                    }
+
+                    const enhancedAuthData = {
+                        ...authData,
+                        role: userRole,
+                        org_id: orgId,
+                        plan: plan
+                    };
+
+                    setLoggedInUser(enhancedAuthData);
+                    try {
+                        window.loggedInUser = enhancedAuthData;
+                        window.showNotification = ({ message, type = 'info', action, duration }) => {
+                            setNotification({ message, type, action, duration });
+                        };
+                    } catch (e) { }
+                    if (authData.userType === 'client') {
+                        setCurrentView('client');
+                        setSelectedProject(authData.project);
+                    }
+                } catch (e) {
+                    localStorage.removeItem('access_token');
+                    localStorage.removeItem('refresh_token');
+                    localStorage.removeItem('user_data');
+                }
+            } else {
+                localStorage.removeItem('aiProjectControlTowerAuth_v2');
+                setIsLoading(false);
+            }
+        }, []);
+
+        // Copy project loading logic (lines 243-275)
+        useEffect(() => {
+            window.openSubscriptionManagement = () => setShowSubscriptionManagement(true);
+            return () => { try { delete window.openSubscriptionManagement; } catch (e) { } };
+        }, []);
+
+        useEffect(() => {
+            if (loggedInUser) {
+                setIsLoading(true);
+                makeAuthenticatedRequest('/api/projects', { method: 'GET', headers: { 'Content-Type': 'application/json' } })
+                    .then(res => res.json())
+                    .then(data => {
+                        // Handle error responses (non-array) and ensure projects is always an array
+                        const projectsArray = Array.isArray(data) ? data : [];
+                        if (!Array.isArray(data) && data && data.status === 'error') {
+                            console.error('Projects API error:', data.message);
+                            setAppError(data.message || 'Could not load projects list.');
+                        }
+                        setProjects(projectsArray);
+                        // If projectId is provided, use it to set selectedProject
+                        if (projectId) {
+                            const project = projectsArray.find(p => p.name === projectId || p.id === projectId);
+                            if (project) {
+                                setSelectedProject(project.name);
+                            } else if (projectsArray.length > 0 && !selectedProject) {
+                                setSelectedProject(projectsArray[0].name);
+                            }
+                        } else if (loggedInUser.userType !== 'client' && projectsArray.length > 0 && !selectedProject) {
+                            setSelectedProject(projectsArray[0].name);
+                        }
+                    })
+                    .catch(err => {
+                        setAppError('Could not load projects list.');
+                        setProjects([]);
+                    })
+                    .finally(() => {
+                        if (loggedInUser.userType !== 'client' || !selectedProject) {
+                            setIsLoading(false);
+                        }
+                    });
+
+                if (loggedInUser.userType === 'super_admin') {
+                    makeAuthenticatedRequest('/api/pending_admins', { method: 'GET', headers: { 'Content-Type': 'application/json' } })
+                        .then(res => res.json())
+                        .then(data => setPendingAdmins(data))
+                        .catch(err => console.error("Could not fetch pending admins"));
+                }
+            }
+        }, [loggedInUser, projectId]);
+
+        // Copy trial status logic (lines 277-300)
+        useEffect(() => {
+            if (loggedInUser && loggedInUser.role !== 'super_admin' && loggedInUser.userType !== 'client') {
+                makeAuthenticatedRequest('/api/org/trial-status', {
+                    method: 'GET',
+                    headers: { 'Content-Type': 'application/json' }
+                })
+                    .then(res => res.json())
+                    .then(data => {
+                        if (data.status === 'success') {
+                            setTrialStatus(data);
+                        }
+                    })
+                    .catch(err => {
+                        console.error('Failed to fetch trial status:', err);
+                    });
+
+                const dismissed = sessionStorage.getItem('trial_banner_dismissed') === 'true';
+                setIsTrialBannerDismissed(dismissed);
+            }
+        }, [loggedInUser]);
+
+        // Copy tutorial event listener (lines 302-313)
+        useEffect(() => {
+            const handleStartTutorial = () => {
+                setShowTutorial(true);
+            };
+            window.addEventListener('startOnboardingTour', handleStartTutorial);
+            return () => {
+                window.removeEventListener('startOnboardingTour', handleStartTutorial);
+            };
+        }, []);
+
+        // Copy normalizeTasks function (lines 315-345)
+        const normalizeTasks = (tasksToNormalize) => {
+            if (!tasksToNormalize || !Array.isArray(tasksToNormalize)) return [];
+            return tasksToNormalize.map(t => {
+                const subtasks = (t.subtasks && t.subtasks.length > 0) ? normalizeTasks(t.subtasks) : [];
+                return {
+                    id: t.id || generateUUID(),
+                    wbs: t.wbs || '',
+                    taskName: t.taskName || '',
+                    plannedStartDate: parseCSVDate(t.plannedStartDate || ''),
+                    plannedEndDate: parseCSVDate(t.plannedEndDate || ''),
+                    predecessorString: t.predecessorString || '',
+                    originalDurationDays: String(t.originalDurationDays || '0').replace(' days', ''),
+                    weightage: t.weightage ?? 0,
+                    actualStartDate: parseCSVDate(t.actualStartDate || ''),
+                    actualEndDate: parseCSVDate(t.actualEndDate || ''),
+                    progress: t.progress || 0,
+                    status: t.status || 'Not Started',
+                    notes: Array.isArray(t.notes) ? t.notes : (typeof t.notes === 'string' && t.notes.trim() ? [{ text: t.notes, timestamp: new Date().toISOString(), source: 'AI Risk Assessment' }] : []),
+                    isClientDeliverable: t.isClientDeliverable || false,
+                    isCritical: t.isCritical || false,
+                    dependencies: t.dependencies || [],
+                    clientComments: (t.clientComments || []).map(c => ({ ...c, id: c.id || generateUUID() })),
+                    delayWeatherDays: t.delayWeatherDays || 0,
+                    delayContractorDays: t.delayContractorDays || 0,
+                    delayClientDays: t.delayClientDays || 0,
+                    isExpanded: t.isExpanded !== undefined ? t.isExpanded : true,
+                    subtasks: subtasks
+                };
+            });
+        };
+
+        // Copy pagination state (lines 347-349)
+        const [currentPage, setCurrentPage] = useState(1);
+        const [hasMoreTasks, setHasMoreTasks] = useState(true);
+        const [isLoadingMore, setIsLoadingMore] = useState(false);
+
+        // Copy loadInitialData function (lines 351-375)
+        const loadInitialData = useCallback((projectName) => {
+            setIsLoading(true);
+            setCurrentPage(1);
+            setHasMoreTasks(true);
+
+            makeAuthenticatedRequest(`/api/load?project=${encodeURIComponent(projectName)}&page=1&per_page=50`, { method: 'GET', headers: { 'Content-Type': 'application/json' } })
+                .then(res => res.ok ? res.json() : res.json().then(err => Promise.reject(err)))
+                .then(response => {
+                    const raw = response.data || response;
+                    const normalized = normalizeTasks(raw || []);
+                    setTasks(recalculateParentProgress(normalized));
+                    if (response.pagination) {
+                        setHasMoreTasks(response.pagination.has_more);
+                    }
+                })
+                .catch(err => setAppError(`Could not load tasks for ${projectName}: ${err.message}`))
+                .finally(() => setIsLoading(false));
+
+            makeAuthenticatedRequest(`/api/chart_data?project=${encodeURIComponent(projectName)}`, { method: 'GET', headers: { 'Content-Type': 'application/json' } })
+                .then(res => res.json())
+                .then(data => setDashboardData(data))
+                .catch(err => console.error("Failed to load dashboard data:", err));
+        }, []);
+
+        // Copy loadMoreTasks function (lines 377-401)
+        const loadMoreTasks = useCallback(() => {
+            if (isLoadingMore || !hasMoreTasks || !selectedProject) return;
+            setIsLoadingMore(true);
+            const nextPage = currentPage + 1;
+            makeAuthenticatedRequest(`/api/load?project=${encodeURIComponent(selectedProject)}&page=${nextPage}&per_page=50`, { method: 'GET', headers: { 'Content-Type': 'application/json' } })
+                .then(res => res.ok ? res.json() : res.json().then(err => Promise.reject(err)))
+                .then(response => {
+                    const newTasks = response.data || [];
+                    const normalized = normalizeTasks(newTasks);
+                    setTasks(prevTasks => {
+                        const updatedTasks = [...prevTasks, ...recalculateParentProgress(normalized)];
+                        return updatedTasks;
+                    });
+                    setCurrentPage(nextPage);
+                    if (response.pagination) {
+                        setHasMoreTasks(response.pagination.has_more);
+                    }
+                })
+                .catch(err => console.error("Failed to load more tasks:", err))
+                .finally(() => setIsLoadingMore(false));
+        }, [currentPage, hasMoreTasks, selectedProject, isLoadingMore]);
+
+        // Copy recalculateParentProgress function (lines 430-449)
+        const recalculateParentProgress = (taskList) => {
+            return taskList.map(task => {
+                if (task.subtasks && task.subtasks.length > 0) {
+                    const updatedSubtasks = recalculateParentProgress(task.subtasks);
+                    let totalWeight = 0;
+                    let weightedProgressSum = 0;
+                    updatedSubtasks.forEach(st => {
+                        const weight = parseFloat(st.weightage ?? 0);
+                        const progress = parseFloat(st.progress || 0);
+                        if (!isNaN(weight) && !isNaN(progress)) {
+                            totalWeight += weight;
+                            weightedProgressSum += progress * weight;
+                        }
+                    });
+                    const newProgress = totalWeight > 0 ? parseFloat((weightedProgressSum / totalWeight).toFixed(2)) : 0;
+                    return { ...task, subtasks: updatedSubtasks, progress: newProgress };
+                }
+                return task;
+            });
+        };
+
+        // Copy task loading effect (lines 422-428)
+        useEffect(() => {
+            if (loggedInUser && selectedProject) {
+                loadInitialData(selectedProject);
+            } else {
+                setTasks([]);
+            }
+        }, [loggedInUser, selectedProject, loadInitialData]);
+
+        // Copy handleUpdateTask function (lines 526-579)
+        const handleUpdateTask = useCallback((taskId, updatedData) => {
+            const originalTasks = tasks;
+            const updateTaskRecursively = (taskList, id, data) => {
+                return taskList.map(task => {
+                    if (task.id === id) {
+                        return { ...task, ...data };
+                    }
+                    if (task.subtasks && task.subtasks.length > 0) {
+                        return { ...task, subtasks: updateTaskRecursively(task.subtasks, id, data) };
+                    }
+                    return task;
+                });
+            };
+            const optimisticallyUpdatedTasks = updateTaskRecursively(tasks, taskId, updatedData);
+            const finalTasksState = recalculateParentProgress(optimisticallyUpdatedTasks);
+            setTasks(finalTasksState);
+            const payload = {
+                taskId: taskId,
+                updatedData: updatedData,
+                user_email: loggedInUser.email
+            };
+            makeAuthenticatedRequest(`/api/update_task?project=${encodeURIComponent(selectedProject)}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            })
+                .then(res => {
+                    if (!res.ok) {
+                        setTasks(originalTasks);
+                        return res.json().then(err => { throw new Error(err.message || 'Server update failed.') });
+                    }
+                    return res.json();
+                })
+                .then(data => {
+                    if (data.status !== 'success') {
+                        setTasks(originalTasks);
+                        throw new Error(data.message || 'An unknown error occurred.');
+                    }
+                    setNotification({ message: 'Task updated successfully!', type: 'success' });
+                })
+                .catch(err => {
+                    setTasks(originalTasks);
+                    setAppError('Save error: ' + err.message);
+                });
+        }, [tasks, selectedProject, loggedInUser]);
+
+        // Copy saveDataToServer function (lines 582-604)
+        const saveDataToServer = useCallback((tasksToSave, successMessage = 'Saved successfully') => {
+            let updatedTasks = recalculateParentProgress(tasksToSave);
+            const payload = { tasks: updatedTasks, user_email: loggedInUser.email };
+            makeAuthenticatedRequest(`/api/save?project=${encodeURIComponent(selectedProject)}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            })
+                .then(async res => {
+                    const data = await res.json();
+                    if (handleAPIError(res, data)) return;
+                    return data;
+                })
+                .then(data => {
+                    if (data.status === 'success') {
+                        setTasks(updatedTasks);
+                        setNotification({ message: successMessage, type: 'success' });
+                    } else {
+                        throw new Error(data.message || 'Save failed');
+                    }
+                })
+                .catch(err => setAppError('Save error: ' + err.message));
+        }, [selectedProject, loggedInUser]);
+
+        // Copy handleConfirmAddTask function (lines 606-640)
+        const handleConfirmAddTask = useCallback((newTaskData) => {
+            if (!addTaskContext) return;
+            const payload = {
+                newTask: newTaskData,
+                context: addTaskContext,
+                user_email: loggedInUser.email
+            };
+            makeAuthenticatedRequest(`/api/add_task?project=${encodeURIComponent(selectedProject)}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            })
+                .then(async res => {
+                    const data = await res.json();
+                    if (handleAPIError(res, data)) return;
+                    if (!res.ok) {
+                        throw new Error(data.message || 'Failed to add task.');
+                    }
+                    return data;
+                })
+                .then(data => {
+                    if (data.status === 'success') {
+                        setTasks(normalizeTasks(data.updatedTasks));
+                        setNotification({ message: 'New task added successfully.', type: 'success' });
+                    } else {
+                        throw new Error(data.message);
+                    }
+                })
+                .catch(err => setAppError('Add task error: ' + err.message))
+                .finally(() => {
+                    setAddTaskContext(null);
+                });
+        }, [selectedProject, addTaskContext, loggedInUser]);
+
+        // Copy handleDeleteTask function (lines 642-672)
+        const handleDeleteTask = useCallback((taskId) => {
+            if (!window.confirm("Are you sure you want to delete this task and all its subtasks? This action is irreversible.")) return;
+            const payload = {
+                taskId: taskId,
+                user_email: loggedInUser.email
+            };
+            makeAuthenticatedRequest(`/api/delete_task?project=${encodeURIComponent(selectedProject)}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            })
+                .then(async res => {
+                    const data = await res.json();
+                    if (handleAPIError(res, data)) return;
+                    if (!res.ok) {
+                        throw new Error(data.message || 'Failed to delete task.');
+                    }
+                    return data;
+                })
+                .then(data => {
+                    if (data.status === 'success') {
+                        setTasks(normalizeTasks(data.updatedTasks));
+                        setNotification({ message: 'Task deleted successfully.', type: 'info' });
+                    } else {
+                        throw new Error(data.message);
+                    }
+                })
+                .catch(err => setAppError('Delete task error: ' + err.message));
+        }, [selectedProject, loggedInUser]);
+
+        // Copy handleAddProject function (lines 674-700)
+        const handleAddProject = (name, code) => {
+            const usage = window.latestUsageStats;
+            if (usage && usage.at_limit && usage.at_limit.projects) {
+                alert('You have reached the maximum number of projects allowed by your plan.');
+                if (typeof window.refreshUsageStats === 'function') window.refreshUsageStats();
+                return;
+            }
+            makeAuthenticatedRequest('/api/projects', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ project_name: name, client_access_code: code })
+            })
+                .then(async res => {
+                    const data = await res.json();
+                    if (handleAPIError(res, data)) return;
+                    return data;
+                })
+                .then(data => {
+                    if (data.status === 'success') {
+                        setProjects(prev => [...prev, data.project]);
+                        setSelectedProject(name);
+                        setNotification({ message: 'Project added!', type: 'success' });
+                    } else { throw new Error(data.message); }
+                })
+                .catch(err => setAppError(err.message));
+        };
+
+        // Copy handleCSVImportSuccess function (lines 702-705)
+        const handleCSVImportSuccess = (rowCount) => {
+            setNotification({ message: `${rowCount} tasks imported successfully.`, type: 'success' });
+            loadInitialData(selectedProject);
+        };
+
+        // Copy handleExport function (lines 707-808)
+        const handleExport = (format) => {
+            const getTasksForExport = () => {
+                if (loggedInUser.userType === 'client' || currentView === 'client') {
+                    return clientViewTasks;
+                }
+                return tasks;
+            };
+            const tasksToExport = getTasksForExport();
+            const viewLabel = (loggedInUser.userType === 'client' || currentView === 'client') ? ' (Client View)' : '';
+            const viewLabelForFilename = (loggedInUser.userType === 'client' || currentView === 'client') ? '_client_view' : '';
+            if (format === 'csv') {
+                const csvContent = generateCSV(tasksToExport);
+                const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+                const link = document.createElement("a");
+                const url = URL.createObjectURL(blob);
+                link.setAttribute("href", url);
+                link.setAttribute("download", `${selectedProject}_tasks.csv`);
+                link.style.visibility = 'hidden';
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            } else if (format === 'pdf') {
+                const { jsPDF } = window.jspdf;
+                const doc = new jsPDF();
+                doc.setFontSize(18); doc.text(APP_TITLE, 14, 22);
+                doc.setFontSize(11); doc.setTextColor(100); doc.text(selectedProject || "No Project Selected", 14, 28);
+                doc.setFontSize(10); doc.setTextColor(150); doc.text(`Project: ${selectedProject}${viewLabel}`, 14, 34);
+                const flattenedTasksForExport = [];
+                const flatten = (tasksToFlatten) => {
+                    tasksToFlatten.forEach(task => {
+                        flattenedTasksForExport.push(task);
+                        if (task.subtasks) flatten(task.subtasks);
+                    });
+                };
+                flatten(tasksToExport);
+                const head = [['WBS', 'Task Name', 'Planned Start', 'Planned End', 'Status', 'Progress (%)', 'Critical']];
+                const body = flattenedTasksForExport.map(task => [task.wbs, task.taskName, formatDateForDisplay(task.plannedStartDate), formatDateForDisplay(task.plannedEndDate), task.status, task.progress || 0, task.isCritical ? 'Yes' : 'No']);
+                doc.autoTable({ startY: 40, head, body, theme: 'grid' });
+                doc.save(`${selectedProject}_schedule${viewLabelForFilename}.pdf`);
+            } else if (format === 'gantt') {
+                const ganttElement = document.getElementById('gantt-chart-render-area');
+                if (!ganttElement) {
+                    setAppError("Gantt chart not found. Please ensure the chart is visible before exporting.");
+                    return;
+                }
+                if (!window.html2canvas) {
+                    setAppError("Export library not loaded. Please refresh the page and try again.");
+                    return;
+                }
+                if (!tasksToExport || tasksToExport.length === 0) {
+                    setAppError("No tasks available for Gantt export.");
+                    return;
+                }
+                const scrollWidth = ganttElement.scrollWidth;
+                const scrollHeight = ganttElement.scrollHeight;
+                const MAX_CANVAS_AREA = 16384 * 16384;
+                if (scrollWidth * scrollHeight > MAX_CANVAS_AREA) {
+                    setAppError("The Gantt chart is too large to export as a single image. Please apply filters to reduce the number of tasks.");
+                    return;
+                }
+                setNotification({ message: 'Generating high-quality Gantt chart image...', type: 'info' });
+                window.html2canvas(ganttElement, {
+                    backgroundColor: '#ffffff',
+                    width: scrollWidth,
+                    height: scrollHeight,
+                    windowWidth: scrollWidth,
+                    windowHeight: scrollHeight,
+                    useCORS: true,
+                    scale: 2
+                }).then(canvas => {
+                    const image = canvas.toDataURL('image/png', 1.0);
+                    if (!image || image.length < 100 || image === 'data:,') {
+                        setAppError("The Gantt chart is too large to export as a single image. Please apply filters to reduce the number of tasks.");
+                        setNotification(null);
+                        return;
+                    }
+                    const link = document.createElement('a');
+                    link.download = `${selectedProject}_gantt_chart${viewLabelForFilename}.png`;
+                    link.href = image;
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                    setNotification({ message: 'High-quality Gantt chart exported successfully!', type: 'success' });
+                }).catch(err => {
+                    console.error("Failed to capture Gantt chart:", err);
+                    setAppError("Could not generate Gantt chart image. " + err.message);
+                });
+            }
+        };
+
+        // Copy handleLogout function (lines 810-834)
+        const handleLogout = () => {
+            const accessToken = localStorage.getItem('access_token');
+            if (accessToken) {
+                fetch('/api/logout', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': 'Bearer ' + accessToken
+                    }
+                }).catch(err => console.error('Logout API error:', err));
+            }
+            localStorage.removeItem('access_token');
+            localStorage.removeItem('refresh_token');
+            localStorage.removeItem('user_data');
+            localStorage.removeItem('aiProjectControlTowerAuth_v2');
+            sessionStorage.removeItem('trial_banner_dismissed');
+            sessionStorage.removeItem('trial_banner_dismissed_at');
+            window.location.href = '/';
+        };
+
+        // Copy handleToggleExpansion function (lines 836-849)
+        const handleToggleExpansion = (taskId) => {
+            const toggle = (taskList) => {
+                return taskList.map(t => {
+                    if (t.id === taskId) {
+                        return { ...t, isExpanded: !t.isExpanded };
+                    }
+                    if (t.subtasks && t.subtasks.length > 0) {
+                        return { ...t, subtasks: toggle(t.subtasks) };
+                    }
+                    return t;
+                });
+            };
+            setTasks(toggle(tasks));
+        };
+
+        // Copy handleToggleAllExpansion function (lines 851-862)
+        const handleToggleAllExpansion = useCallback(() => {
+            const nextExpansionState = !areAllExpanded;
+            const toggleRecursively = (taskList) => {
+                return taskList.map(t => ({
+                    ...t,
+                    isExpanded: nextExpansionState,
+                    subtasks: t.subtasks ? toggleRecursively(t.subtasks) : []
+                }));
+            };
+            setTasks(toggleRecursively(tasks));
+            setAreAllExpanded(nextExpansionState);
+        }, [tasks, areAllExpanded]);
+
+        // Copy handleToggleAllClientDeliverables function (lines 864-910)
+        const handleToggleAllClientDeliverables = useCallback((shouldSelectAll) => {
+            const toggleRecursively = (taskList) => {
+                return taskList.map(t => ({
+                    ...t,
+                    isClientDeliverable: shouldSelectAll,
+                    subtasks: t.subtasks ? toggleRecursively(t.subtasks) : []
+                }));
+            };
+            const optimisticallyUpdatedTasks = toggleRecursively(tasks);
+            setTasks(optimisticallyUpdatedTasks);
+            const payload = {
+                should_select_all: shouldSelectAll,
+                user_email: loggedInUser.email
+            };
+            makeAuthenticatedRequest(`/api/toggle_all_client_deliverables?project=${encodeURIComponent(selectedProject)}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            })
+                .then(res => {
+                    if (!res.ok) {
+                        setTasks(tasks);
+                        return res.json().then(err => { throw new Error(err.message || 'Server update failed.') });
+                    }
+                    return res.json();
+                })
+                .then(data => {
+                    if (data.status === 'success') {
+                        const message = shouldSelectAll ? 'All tasks marked for client view.' : 'All tasks removed from client view.';
+                        setNotification({ message: message, type: 'success' });
+                    } else {
+                        throw new Error(data.message);
+                    }
+                })
+                .catch(err => {
+                    setTasks(tasks);
+                    setAppError('Bulk update error: ' + err.message);
+                });
+        }, [tasks, selectedProject, loggedInUser]);
+
+        // Copy clientViewTasks useMemo (lines 921-930)
+        const clientViewTasks = useMemo(() => {
+            if (!tasks) return [];
+            const filterDeliverables = (taskList) => {
+                if (!taskList) return [];
+                return taskList
+                    .map(task => ({ ...task, subtasks: filterDeliverables(task.subtasks) }))
+                    .filter(task => task.isClientDeliverable || (task.subtasks && task.subtasks.length > 0));
+            };
+            return filterDeliverables(tasks);
+        }, [tasks]);
+
+        // Copy filteredAndSortedTasks useMemo (lines 932-983)
+        const filteredAndSortedTasks = useMemo(() => {
+            if (!loggedInUser) return [];
+            let baseTasks = (currentView === 'client' && loggedInUser.userType !== 'client') ? clientViewTasks : tasks;
+            if (loggedInUser.userType === 'client') {
+                baseTasks = clientViewTasks;
+            }
+            let filtered = baseTasks;
+            if (searchTerm || startDateFilter || endDateFilter) {
+                const searchFilter = (taskList) => {
+                    if (!taskList) return [];
+                    return taskList.map(task => {
+                        const hasVisibleSubtasks = task.subtasks && task.subtasks.length > 0;
+                        const subtasks = hasVisibleSubtasks ? searchFilter(task.subtasks) : [];
+                        const matchesSearch = searchTerm ? (task.taskName || '').toLowerCase().includes(searchTerm.toLowerCase()) || (task.wbs || '').toLowerCase().includes(searchTerm.toLowerCase()) : true;
+                        const matchesStartDate = startDateFilter && task.plannedStartDate ? task.plannedStartDate >= startDateFilter : true;
+                        const matchesEndDate = endDateFilter && task.plannedEndDate ? task.plannedEndDate <= endDateFilter : true;
+                        const selfMatches = matchesSearch && matchesStartDate && matchesEndDate;
+                        if (selfMatches || subtasks.length > 0) {
+                            return { ...task, subtasks };
+                        }
+                        return null;
+                    }).filter(Boolean);
+                };
+                filtered = searchFilter(filtered);
+            }
+            const sortRecursively = (taskList) => {
+                if (!taskList) return;
+                taskList.sort((a, b) => {
+                    const fieldA = a[sortBy.field], fieldB = b[sortBy.field]; let comparison = 0;
+                    if (sortBy.field === 'wbs') {
+                        comparison = a.wbs.localeCompare(b.wbs, undefined, { numeric: true, sensitivity: 'base' });
+                    } else {
+                        if (fieldA > fieldB) comparison = 1; else if (fieldA < fieldB) comparison = -1;
+                    }
+                    return sortBy.order === 'asc' ? comparison : comparison * -1;
+                });
+                taskList.forEach(task => { if (task.subtasks) sortRecursively(task.subtasks); });
+            };
+            const sorted = [...filtered];
+            sortRecursively(sorted);
+            return sorted;
+        }, [tasks, clientViewTasks, currentView, loggedInUser, searchTerm, startDateFilter, endDateFilter, sortBy]);
+
+        // Copy handleSort function (line 985)
+        const handleSort = (field) => { setSortBy(prev => ({ field, order: prev.field === field && prev.order === 'asc' ? 'desc' : 'asc' })); };
+
+        // Copy error timeout effect (lines 987-989)
+        useEffect(() => {
+            if (appError) { const timer = setTimeout(() => setAppError(null), 7000); return () => clearTimeout(timer); }
+        }, [appError]);
+
+        // Copy unreadNotifications useMemo (lines 991-1025)
+        const unreadNotifications = useMemo(() => {
+            if (!loggedInUser) return [];
+            const notifications = new Map();
+            const findUnread = (taskList) => {
+                if (!taskList) return;
+                taskList.forEach(task => {
+                    if (task.clientComments && task.clientComments.length > 0) {
+                        if (loggedInUser.userType === 'client') {
+                            const hasPending = task.clientComments.some(c => !c.clientStatus);
+                            if (hasPending && !notifications.has(task.id)) {
+                                const latestPending = [...task.clientComments].reverse().find(c => !c.clientStatus);
+                                let notificationText = "New communication received.";
+                                const type = latestPending.communicationType;
+                                if (type === 'Information') { notificationText = "Information regarding project has been delivered."; }
+                                else if (type === 'Review') { notificationText = "A comment for your review has been received."; }
+                                else if (type === 'Approval') { notificationText = "Something needs your approval."; }
+                                notifications.set(task.id, { ...task, notificationText });
+                            }
+                        } else if (loggedInUser.userType !== 'client') {
+                            const hasUnread = task.clientComments.some(c => c.clientStatus && c.adminSeen === false);
+                            if (hasUnread && !notifications.has(task.id)) {
+                                notifications.set(task.id, { ...task, notificationText: "Client has responded to a communication." });
+                            }
+                        }
+                    }
+                    if (task.subtasks) findUnread(task.subtasks);
+                });
+            };
+            findUnread(tasks);
+            return Array.from(notifications.values());
+        }, [tasks, loggedInUser]);
+
+        // Copy findTaskById helper
+        const findTaskById = (taskList, taskId) => {
+            for (const task of taskList) {
+                if (task.id === taskId) return task;
+                if (task.subtasks && task.subtasks.length > 0) {
+                    const found = findTaskById(task.subtasks, taskId);
+                    if (found) return found;
+                }
+            }
+            return null;
+        };
+
+        // Update project name in header when selectedProject changes
+        useEffect(() => {
+            if (selectedProject) {
+                const headerEl = document.getElementById('project-name-header');
+                const breadcrumbEl = document.getElementById('project-name-breadcrumb');
+                if (headerEl) headerEl.textContent = selectedProject;
+                if (breadcrumbEl) breadcrumbEl.textContent = selectedProject;
+            }
+        }, [selectedProject]);
+
+        // Render based on active tab
+        if (isLoading && !loggedInUser) {
+            return React.createElement(LoadingSpinner, { message: "Authenticating..." });
+        }
+
+        return React.createElement("div", { className: "workspace-app-container" },
+            // Trial banner
+            loggedInUser && loggedInUser.role !== 'super_admin' && loggedInUser.userType !== 'client' && trialStatus &&
+            React.createElement(TrialCountdownBanner, {
+                trialStatus: trialStatus,
+                onUpgradeClick: () => setShowSubscriptionManagement(true),
+                onDismiss: () => {
+                    setIsTrialBannerDismissed(true);
+                    sessionStorage.setItem('trial_banner_dismissed', 'true');
+                },
+                isDismissed: isTrialBannerDismissed
+            }),
+
+            // Notification toast
+            notification && React.createElement(NotificationToast, {
+                message: notification.message,
+                type: notification.type,
+                onDismiss: () => setNotification(null)
+            }),
+
+            // Error alert
+            appError && React.createElement("div", {
+                className: "mb-4 p-3 bg-red-100 border border-red-300 text-red-700 rounded-lg text-sm",
+                role: "alert"
+            }, React.createElement("strong", null, "Error: "), appError),
+
+            // Tab content - conditionally render based on activeTab
+            (activeTab === 'overview' && (isLoading || isTabLoading))
+                ? React.createElement(OverviewSkeleton)
+                : activeTab === 'overview' && React.createElement(OverviewTab, {
+                    tasks: tasks,
+                    dashboardData: dashboardData,
+                    selectedProject: selectedProject,
+                    onShowDetails: openDetailsModal,
+                    onEditTask: openEditModal,
+                    loggedInUserType: loggedInUser ? loggedInUser.userType : null
+                }),
+
+            (activeTab === 'wbs' && (isLoading || isTabLoading))
+                ? React.createElement(WBSSkeleton)
+                : activeTab === 'wbs' && React.createElement(WBSTab, {
+                    tasks: filteredAndSortedTasks,
+                    viewType: currentView,
+                    loggedInUserType: loggedInUser ? loggedInUser.userType : null,
+                    sortBy: sortBy,
+                    onSort: handleSort,
+                    areAllExpanded: areAllExpanded,
+                    onToggleAllExpansion: handleToggleAllExpansion,
+                    hasMoreTasks: hasMoreTasks,
+                    isLoadingMore: isLoadingMore,
+                    loadMoreTasks: loadMoreTasks,
+                    isTrialExpired: isTrialExpired,
+                    onUpdateTask: handleUpdateTask,
+                    onEditTask: openEditModal,
+                    onAIUpdate: openAIModal,
+                    onShowNotes: openNotesModal,
+                    onShowDetails: openDetailsModal,
+                    onClientComm: openClientCommModal,
+                    onToggleClientDeliverable: (task, isChecked) => handleUpdateTask(task.id, { isClientDeliverable: isChecked }),
+                    onToggleExpansion: handleToggleExpansion,
+                    onAddTask: (task) => openAddTaskModal(task, 'sibling'),
+                    onAddSubTask: (task) => openAddTaskModal(task, 'child'),
+                    onDeleteTask: handleDeleteTask,
+                    searchTerm: searchTerm,
+                    onSearchChange: setSearchTerm,
+                    dateRange: { start: startDateFilter, end: endDateFilter },
+                    onDateRangeChange: (start, end) => { setStartDateFilter(start); setEndDateFilter(end); },
+                    onExport: handleExport,
+                    onImportCSV: () => setShowCSVImportModal(true)
+                }),
+
+            (activeTab === 'gantt' && (isLoading || isTabLoading))
+                ? React.createElement(GanttSkeleton)
+                : activeTab === 'gantt' && React.createElement(GanttTab, {
+                    tasks: filteredAndSortedTasks,
+                    onToggleExpansion: handleToggleExpansion
+                }),
+
+            activeTab === 'ai-insights' && React.createElement(AIInsightsTab, {
+                tasks: tasks,
+                dashboardData: dashboardData,
+                selectedProject: selectedProject,
+                onAIUpdate: openAIModal,
+                loggedInUserType: loggedInUser ? loggedInUser.userType : null
+            }),
+
+            activeTab === 'documents' && React.createElement(DocumentsTab, {
+                selectedProject: selectedProject,
+                tasks: tasks,
+                loggedInUserType: loggedInUser ? loggedInUser.userType : null,
+                isTrialExpired: isTrialExpired
+            }),
+
+            activeTab === 'communication' && React.createElement(CommunicationTab, {
+                tasks: tasks,
+                selectedProject: selectedProject,
+                loggedInUser: loggedInUser,
+                onAdminAddComment: (taskId, comment, type, attachmentPaths) => {
+                    const taskToUpdate = findTaskById(tasks, taskId);
+                    if (taskToUpdate) {
+                        const newComment = {
+                            id: generateUUID(),
+                            adminName: loggedInUser.name,
+                            adminTimestamp: new Date().toISOString(),
+                            adminComment: comment,
+                            communicationType: type,
+                            attachments: attachmentPaths || []
+                        };
+                        const updatedComments = [...(taskToUpdate.clientComments || []), newComment];
+                        handleUpdateTask(taskId, { clientComments: updatedComments });
+                    }
+                },
+                onClientRespond: (taskId, commentId, status, commentText, clientAttachmentPaths = []) => {
+                    const taskToUpdate = findTaskById(tasks, taskId);
+                    if (taskToUpdate) {
+                        const updatedComments = (taskToUpdate.clientComments || []).map(cc =>
+                            cc.id === commentId
+                                ? {
+                                    ...cc,
+                                    clientStatus: status,
+                                    clientComment: commentText,
+                                    clientResponseTimestamp: new Date().toISOString(),
+                                    clientAttachments: clientAttachmentPaths
+                                }
+                                : cc
+                        );
+                        handleUpdateTask(taskId, { clientComments: updatedComments });
+                    }
+                },
+                isTrialExpired: isTrialExpired
+            }),
+
+            activeTab === 'team-permissions' && React.createElement(TeamPermissionsTab, {
+                selectedProject: selectedProject,
+                loggedInUser: loggedInUser,
+                isTrialExpired: isTrialExpired
+            }),
+
+            // All modals
+            showEditModal && selectedTask && React.createElement(EditTaskModal, {
+                task: selectedTask,
+                onClose: () => setShowEditModal(false),
+                onSave: (updatedData) => {
+                    handleUpdateTask(selectedTask.id, updatedData);
+                    setShowEditModal(false);
+                },
+                isTrialExpired: isTrialExpired
+            }),
+
+            showAIModal && selectedTask && React.createElement(AIUpdateModal, {
+                task: selectedTask,
+                allTasks: tasks,
+                loggedInUserType: loggedInUser ? loggedInUser.userType : null,
+                onClose: () => setShowAIModal(false),
+                setAppError: setAppError,
+                onApplySuggestion: (taskId, suggestedData) => {
+                    handleUpdateTask(taskId, suggestedData);
+                    setShowAIModal(false);
+                },
+            }),
+
+            showNotesModal && selectedTask && React.createElement(NotesModal, {
+                task: selectedTask,
+                loggedInUser: loggedInUser,
+                onClose: () => setShowNotesModal(false),
+                onAddNote: (taskId, noteText) => {
+                    const taskToUpdate = findTaskById(tasks, taskId);
+                    if (taskToUpdate) {
+                        const newNote = {
+                            text: noteText,
+                            timestamp: new Date().toISOString(),
+                            source: loggedInUser.name
+                        };
+                        const updatedNotes = [...(taskToUpdate.notes || []), newNote];
+                        handleUpdateTask(taskId, { notes: updatedNotes });
+                    }
+                    setShowNotesModal(false);
+                }
+            }),
+
+            showClientCommModal && selectedTask && React.createElement(ClientCommunicationModal, {
+                task: selectedTask,
+                loggedInUser: loggedInUser,
+                selectedProject: selectedProject,
+                onClose: () => setShowClientCommModal(false),
+                onAdminAddComment: (taskId, comment, type, attachmentPaths) => {
+                    const taskToUpdate = findTaskById(tasks, taskId);
+                    if (taskToUpdate) {
+                        const newComment = {
+                            id: generateUUID(),
+                            adminName: loggedInUser.name,
+                            adminTimestamp: new Date().toISOString(),
+                            adminComment: comment,
+                            communicationType: type,
+                            attachments: attachmentPaths || []
+                        };
+                        const updatedComments = [...(taskToUpdate.clientComments || []), newComment];
+                        handleUpdateTask(taskId, { clientComments: updatedComments });
+                    }
+                    setShowClientCommModal(false);
+                },
+                onClientRespond: (taskId, commentId, status, commentText, clientAttachmentPaths = []) => {
+                    const taskToUpdate = findTaskById(tasks, taskId);
+                    if (taskToUpdate) {
+                        const updatedComments = (taskToUpdate.clientComments || []).map(cc =>
+                            cc.id === commentId
+                                ? {
+                                    ...cc,
+                                    clientStatus: status,
+                                    clientComment: commentText,
+                                    clientResponseTimestamp: new Date().toISOString(),
+                                    clientAttachments: clientAttachmentPaths
+                                }
+                                : cc
+                        );
+                        handleUpdateTask(taskId, { clientComments: updatedComments });
+                    }
+                    setShowClientCommModal(false);
+                }
+            }),
+
+            showAddTaskModal && addTaskContext && React.createElement(AddTaskModal, {
+                mode: addTaskContext.mode,
+                onClose: () => setAddTaskContext(null),
+                onAdd: handleConfirmAddTask
+            }),
+
+            showCSVImportModal && React.createElement(CSVImportModal, {
+                onClose: () => setShowCSVImportModal(false),
+                onImport: handleCSVImportSuccess,
+                selectedProject: selectedProject,
+                loggedInUser: loggedInUser
+            }),
+
+            showDetailsModal && selectedTask && React.createElement(TaskDetailsModal, {
+                task: selectedTask,
+                onClose: () => setShowDetailsModal(false),
+                loggedInUserType: loggedInUser ? loggedInUser.userType : null
+            }),
+
+            showUserManagementModal && React.createElement(UserManagementModal, {
+                onClose: () => setShowUserManagementModal(false),
+                loggedInUser: loggedInUser,
+                onUserCreated: (user) => {
+                    setNotification({ message: 'User created successfully', type: 'success' });
+                },
+                onUserUpdated: (user) => {
+                    setNotification({ message: 'User updated successfully', type: 'success' });
+                },
+                onUserDeleted: (userId) => {
+                    setNotification({ message: 'User deleted successfully', type: 'success' });
+                }
+            }),
+
+            showSubscriptionManagement && React.createElement(SubscriptionManagementModal, {
+                onClose: () => setShowSubscriptionManagement(false),
+                loggedInUser: loggedInUser,
+                onSubscriptionUpdated: () => {
+                    if (typeof window.refreshUsageStats === 'function') window.refreshUsageStats();
+                    // Fetch trial status again
+                    if (loggedInUser && loggedInUser.role !== 'super_admin' && loggedInUser.userType !== 'client') {
+                        makeAuthenticatedRequest('/api/org/trial-status', {
+                            method: 'GET',
+                            headers: { 'Content-Type': 'application/json' }
+                        })
+                            .then(res => res.json())
+                            .then(data => {
+                                if (data.status === 'success') {
+                                    setTrialStatus(data);
+                                }
+                            })
+                            .catch(err => console.error('Failed to fetch trial status:', err));
+                    }
+                    setIsTrialBannerDismissed(false);
+                    sessionStorage.removeItem('trial_banner_dismissed');
+                }
+            }),
+
+            showActivityLogModal && React.createElement(ActivityLogModal, {
+                onClose: () => setShowActivityLogModal(false)
+            }),
+
+            // Chatbot
+            React.createElement(Chatbot, { projectTasks: tasks, projectName: selectedProject })
+        );
+    };
+</script>

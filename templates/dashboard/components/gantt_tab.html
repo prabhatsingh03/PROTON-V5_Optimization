@@ -1,0 +1,95 @@
+<script type="text/babel">
+    const GanttTab = ({ tasks, onToggleExpansion }) => {
+        const { useState, useMemo } = React;
+        const [zoomLevel, setZoomLevel] = useState('day'); // day, week, month
+        
+        // Calculate DAY_WIDTH based on zoom level
+        const DAY_WIDTH = useMemo(() => {
+            switch (zoomLevel) {
+                case 'week': return 15;
+                case 'month': return 5;
+                default: return 30;
+            }
+        }, [zoomLevel]);
+        
+        const handleZoomChange = (level) => {
+            setZoomLevel(level);
+        };
+        
+        return React.createElement("div", { className: "gantt-tab-container h-full flex flex-col" },
+            // Gradient Header with Controls
+            React.createElement("div", { className: "bg-gradient-to-r from-blue-500 to-purple-600 text-white p-6 rounded-xl shadow-lg mb-4" },
+                React.createElement("div", { className: "flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4" },
+                    React.createElement("h2", { className: "text-2xl font-bold" }, "Project Gantt Chart"),
+                    React.createElement("div", { className: "flex items-center gap-4" },
+                        // Zoom Controls
+                        React.createElement("div", { className: "flex gap-2 bg-white/20 rounded-lg p-1" },
+                            React.createElement("button", {
+                                onClick: () => handleZoomChange('day'),
+                                className: `px-4 py-2 rounded-md text-sm font-semibold transition-colors ${
+                                    zoomLevel === 'day' ? 'bg-white text-blue-600' : 'text-white hover:bg-white/20'
+                                }`
+                            }, "Day"),
+                            React.createElement("button", {
+                                onClick: () => handleZoomChange('week'),
+                                className: `px-4 py-2 rounded-md text-sm font-semibold transition-colors ${
+                                    zoomLevel === 'week' ? 'bg-white text-blue-600' : 'text-white hover:bg-white/20'
+                                }`
+                            }, "Week"),
+                            React.createElement("button", {
+                                onClick: () => handleZoomChange('month'),
+                                className: `px-4 py-2 rounded-md text-sm font-semibold transition-colors ${
+                                    zoomLevel === 'month' ? 'bg-white text-blue-600' : 'text-white hover:bg-white/20'
+                                }`
+                            }, "Month")
+                        ),
+                        // Export Button
+                        React.createElement("button", {
+                            onClick: () => {
+                                window.dispatchEvent(new CustomEvent('workspaceExportGantt'));
+                            },
+                            className: "px-4 py-2 bg-white/20 hover:bg-white/30 rounded-lg text-sm font-semibold transition-colors"
+                        }, "Export Gantt")
+                    )
+                ),
+                // Legend
+                React.createElement("div", { className: "mt-4 flex flex-wrap gap-4 text-sm" },
+                    React.createElement("div", { className: "flex items-center gap-2" },
+                        React.createElement("div", { className: "w-4 h-4 bg-slate-400 rounded" }),
+                        React.createElement("span", null, "Not Started")
+                    ),
+                    React.createElement("div", { className: "flex items-center gap-2" },
+                        React.createElement("div", { className: "w-4 h-4 bg-blue-500 rounded" }),
+                        React.createElement("span", null, "In Progress")
+                    ),
+                    React.createElement("div", { className: "flex items-center gap-2" },
+                        React.createElement("div", { className: "w-4 h-4 bg-green-500 rounded" }),
+                        React.createElement("span", null, "Completed")
+                    ),
+                    React.createElement("div", { className: "flex items-center gap-2" },
+                        React.createElement("div", { className: "w-4 h-4 bg-red-500 rounded" }),
+                        React.createElement("span", null, "Delayed")
+                    ),
+                    React.createElement("div", { className: "flex items-center gap-2" },
+                        React.createElement("div", { className: "w-4 h-4 bg-blue-200 rounded border-2 border-blue-400" }),
+                        React.createElement("span", null, "Weather Delay")
+                    ),
+                    React.createElement("div", { className: "flex items-center gap-2" },
+                        React.createElement("div", { className: "w-4 h-4 bg-yellow-200 rounded border-2 border-yellow-400" }),
+                        React.createElement("span", null, "Contractor Delay")
+                    ),
+                    React.createElement("div", { className: "flex items-center gap-2" },
+                        React.createElement("div", { className: "w-4 h-4 bg-red-200 rounded border-2 border-red-400" }),
+                        React.createElement("span", null, "Client Delay")
+                    )
+                )
+            ),
+            
+            // Gantt Chart Area
+            React.createElement("div", { className: "flex-1 overflow-auto bg-white rounded-xl shadow-xl" },
+                React.createElement(GanttChart, { tasks: tasks })
+            )
+        );
+    };
+</script>
+

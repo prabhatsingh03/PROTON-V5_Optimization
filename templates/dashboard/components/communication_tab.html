@@ -1,0 +1,369 @@
+<script type="text/babel">
+    const CommunicationTab = ({ tasks, selectedProject, loggedInUser, onAdminAddComment, onClientRespond, isTrialExpired }) => {
+        const { useState, useMemo } = React;
+        const [selectedTask, setSelectedTask] = useState(null);
+        const [messageFilter, setMessageFilter] = useState('all'); // all, pending, resolved
+        const [searchTerm, setSearchTerm] = useState('');
+        const [adminCommentText, setAdminCommentText] = useState('');
+        const [clientCommentText, setClientCommentText] = useState('');
+        const [communicationType, setCommunicationType] = useState('');
+        const [selectedStatus, setSelectedStatus] = useState('');
+        const [selectedCommentForReply, setSelectedCommentForReply] = useState(null);
+        const [attachments, setAttachments] = useState([]);
+        const [isUploading, setIsUploading] = useState(false);
+        
+        // Compute tasks with communication
+        const tasksWithCommunication = useMemo(() => {
+            if (!tasks) return [];
+            const flattenTasks = (taskList) => {
+                let flat = [];
+                taskList.forEach(task => {
+                    if (task.clientComments && task.clientComments.length > 0) {
+                        flat.push(task);
+                    }
+                    if (task.subtasks && task.subtasks.length > 0) {
+                        flat = flat.concat(flattenTasks(task.subtasks));
+                    }
+                });
+                return flat;
+            };
+            return flattenTasks(tasks);
+        }, [tasks]);
+        
+        // Filter tasks
+        const filteredTasks = useMemo(() => {
+            let filtered = tasksWithCommunication;
+            
+            if (searchTerm) {
+                filtered = filtered.filter(task =>
+                    (task.taskName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+                    (task.wbs || '').toLowerCase().includes(searchTerm.toLowerCase())
+                );
+            }
+            
+            if (messageFilter === 'pending') {
+                if (loggedInUser && loggedInUser.userType === 'client') {
+                    filtered = filtered.filter(task =>
+                        task.clientComments && task.clientComments.some(c => !c.clientStatus)
+                    );
+                } else {
+                    filtered = filtered.filter(task =>
+                        task.clientComments && task.clientComments.some(c => c.clientStatus && c.adminSeen === false)
+                    );
+                }
+            } else if (messageFilter === 'resolved') {
+                filtered = filtered.filter(task =>
+                    task.clientComments && task.clientComments.every(c => c.clientStatus && (loggedInUser && loggedInUser.userType === 'client' ? true : c.adminSeen))
+                );
+            }
+            
+            return filtered;
+        }, [tasksWithCommunication, searchTerm, messageFilter, loggedInUser]);
+        
+        // Handle file upload for admin
+        const handleAdminFileUpload = async () => {
+            if (!adminCommentText.trim() || !communicationType) {
+                alert("Please provide a comment and select a communication type.");
+                return;
+            }
+            
+            setIsUploading(true);
+            let uploadedFilePaths = [];
+            if (attachments.length > 0) {
+                const formData = new FormData();
+                attachments.forEach(file => {
+                    formData.append('files[]', file);
+                });
+                formData.append('project_name', selectedProject);
+                formData.append('task_id', String(selectedTask.id));
+                try {
+                    const response = await makeAuthenticatedRequest('/api/upload_document', {
+                        method: 'POST',
+                        body: formData
+                    });
+                    const result = await response.json();
+                    if (result.status === 'success') {
+                        uploadedFilePaths = result.filepaths;
+                    } else {
+                        throw new Error(result.message || 'File upload failed');
+                    }
+                } catch (error) {
+                    alert(`Error uploading files: ${error.message}`);
+                    setIsUploading(false);
+                    return;
+                }
+            }
+            onAdminAddComment(selectedTask.id, adminCommentText.trim(), communicationType, uploadedFilePaths);
+            setAdminCommentText('');
+            setCommunicationType('');
+            setAttachments([]);
+            setIsUploading(false);
+        };
+        
+        // Handle client response
+        const handleClientResponse = async () => {
+            if (!selectedCommentForReply || !selectedStatus) {
+                alert("Please select a status.");
+                return;
+            }
+            
+            setIsUploading(true);
+            let clientUploadedFilePaths = [];
+            if (attachments.length > 0) {
+                const formData = new FormData();
+                attachments.forEach(file => {
+                    formData.append('files[]', file);
+                });
+                formData.append('project_name', selectedProject);
+                formData.append('task_id', String(selectedTask.id));
+                try {
+                    const response = await makeAuthenticatedRequest('/api/upload_document', {
+                        method: 'POST',
+                        body: formData
+                    });
+                    const result = await response.json();
+                    if (result.status === 'success') {
+                        clientUploadedFilePaths = result.filepaths;
+                    } else {
+                        throw new Error(result.message || 'File upload failed');
+                    }
+                } catch (error) {
+                    alert(`Error uploading files: ${error.message}`);
+                    setIsUploading(false);
+                    return;
+                }
+            }
+            onClientRespond(selectedTask.id, selectedCommentForReply.id, selectedStatus, clientCommentText, clientUploadedFilePaths);
+            setClientCommentText('');
+            setSelectedStatus('');
+            setSelectedCommentForReply(null);
+            setAttachments([]);
+            setIsUploading(false);
+        };
+        
+        return React.createElement("div", { className: "communication-tab-container h-full flex flex-col" },
+            // Gradient Header
+            React.createElement("div", { className: "bg-gradient-to-r from-blue-500 to-purple-600 text-white p-6 rounded-xl shadow-lg mb-4" },
+                React.createElement("div", { className: "flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4" },
+                    React.createElement("h2", { className: "text-2xl font-bold" }, "Project Communication"),
+                    React.createElement("div", { className: "flex gap-2" },
+                        React.createElement("button", {
+                            onClick: () => setMessageFilter('all'),
+                            className: `px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${
+                                messageFilter === 'all' ? 'bg-white text-blue-600' : 'bg-white/20 text-white hover:bg-white/30'
+                            }`
+                        }, "All"),
+                        React.createElement("button", {
+                            onClick: () => setMessageFilter('pending'),
+                            className: `px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${
+                                messageFilter === 'pending' ? 'bg-white text-blue-600' : 'bg-white/20 text-white hover:bg-white/30'
+                            }`
+                        }, "Pending"),
+                        React.createElement("button", {
+                            onClick: () => setMessageFilter('resolved'),
+                            className: `px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${
+                                messageFilter === 'resolved' ? 'bg-white text-blue-600' : 'bg-white/20 text-white hover:bg-white/30'
+                            }`
+                        }, "Resolved")
+                    ),
+                    React.createElement("input", {
+                        type: "text",
+                        placeholder: "Search tasks...",
+                        value: searchTerm,
+                        onChange: (e) => setSearchTerm(e.target.value),
+                        className: "px-4 py-2 rounded-lg text-gray-800 focus:ring-2 focus:ring-white focus:outline-none"
+                    })
+                )
+            ),
+            
+            // Two-Column Layout
+            React.createElement("div", { className: "communication-layout flex-1 flex gap-4 overflow-hidden" },
+                // Left Column: Task List
+                React.createElement("div", { className: "communication-task-list w-full md:w-1/3 bg-slate-50 border-r border-gray-200 overflow-y-auto rounded-lg" },
+                    filteredTasks.length > 0 ? (
+                        filteredTasks.map(task => {
+                            const hasPending = loggedInUser && loggedInUser.userType === 'client' ?
+                                task.clientComments && task.clientComments.some(c => !c.clientStatus) :
+                                task.clientComments && task.clientComments.some(c => c.clientStatus && c.adminSeen === false);
+                            const latestComment = task.clientComments && task.clientComments.length > 0 ?
+                                task.clientComments[task.clientComments.length - 1] : null;
+                            
+                            return React.createElement("div", {
+                                key: task.id,
+                                onClick: () => setSelectedTask(task),
+                                className: `p-4 border-b border-gray-200 cursor-pointer transition-colors ${
+                                    selectedTask && selectedTask.id === task.id ? 'bg-white border-l-4 border-blue-500' : 'hover:bg-slate-100'
+                                }`
+                            },
+                                React.createElement("div", { className: "flex items-center justify-between mb-1" },
+                                    React.createElement("span", { className: "text-xs font-mono text-gray-500" }, task.wbs),
+                                    hasPending && React.createElement("span", { className: "w-2 h-2 bg-red-500 rounded-full" })
+                                ),
+                                React.createElement("p", { className: "font-semibold text-gray-800 truncate" }, task.taskName),
+                                latestComment && React.createElement("p", {
+                                    className: "text-xs text-gray-500 truncate mt-1"
+                                }, latestComment.adminComment || latestComment.clientComment || '')
+                            );
+                        })
+                    ) : (
+                        React.createElement("div", { className: "p-8 text-center text-gray-400" },
+                            React.createElement("p", null, "No tasks with communication")
+                        )
+                    )
+                ),
+                
+                // Right Column: Message Thread
+                React.createElement("div", { className: "communication-thread flex-1 bg-white rounded-lg overflow-hidden flex flex-col" },
+                    selectedTask ? (
+                        React.createElement(React.Fragment, null,
+                            // Task Header
+                            React.createElement("div", { className: "bg-gradient-to-r from-blue-500 to-purple-600 text-white p-4" },
+                                React.createElement("div", { className: "flex items-center justify-between" },
+                                    React.createElement("div", null,
+                                        React.createElement("span", { className: "text-xs font-mono text-blue-100" }, selectedTask.wbs),
+                                        React.createElement("h3", { className: "font-bold" }, selectedTask.taskName)
+                                    ),
+                                    React.createElement("button", {
+                                        onClick: () => setSelectedTask(null),
+                                        className: "text-white hover:text-gray-200"
+                                    }, "✕")
+                                )
+                            ),
+                            
+                            // Message Thread
+                            React.createElement("div", { className: "flex-1 overflow-y-auto p-4 space-y-4" },
+                                selectedTask.clientComments && selectedTask.clientComments.map((comment, idx) => (
+                                    React.createElement("div", { key: idx },
+                                        // Admin Message
+                                        React.createElement("div", { className: "communication-message-admin mb-4" },
+                                            React.createElement("div", { className: "flex items-center justify-between mb-1" },
+                                                React.createElement("span", { className: "font-semibold text-blue-800" }, comment.adminName || 'Admin'),
+                                                React.createElement("span", { className: "text-xs text-blue-600" },
+                                                    new Date(comment.adminTimestamp).toLocaleString()
+                                                )
+                                            ),
+                                            React.createElement("p", { className: "text-gray-700" }, comment.adminComment),
+                                            comment.attachments && comment.attachments.length > 0 && (
+                                                React.createElement("div", { className: "mt-2 space-y-1" },
+                                                    comment.attachments.map((att, attIdx) => (
+                                                        React.createElement("a", {
+                                                            key: attIdx,
+                                                            href: `/download_document/${encodeURIComponent(selectedProject)}/${encodeURIComponent(selectedTask.id)}/${encodeURIComponent(att)}`,
+                                                            className: "text-xs text-blue-600 hover:underline"
+                                                        }, `📎 ${att}`)
+                                                    ))
+                                                )
+                                            )
+                                        ),
+                                        
+                                        // Client Response (if exists)
+                                        comment.clientStatus && (
+                                            React.createElement("div", { className: "communication-message-client ml-auto" },
+                                                React.createElement("div", { className: "flex items-center justify-between mb-1" },
+                                                    React.createElement("span", { className: "font-semibold text-green-800" }, "Client"),
+                                                    React.createElement("span", { className: "text-xs text-green-600" },
+                                                        comment.clientResponseTimestamp ? new Date(comment.clientResponseTimestamp).toLocaleString() : ''
+                                                    )
+                                                ),
+                                                React.createElement("p", { className: "text-gray-700" }, comment.clientComment),
+                                                React.createElement("span", {
+                                                    className: `px-2 py-1 text-xs rounded-full mt-1 inline-block ${
+                                                        comment.clientStatus === 'Approved' ? 'bg-green-100 text-green-700' :
+                                                        comment.clientStatus === 'Rejected' ? 'bg-red-100 text-red-700' :
+                                                        'bg-yellow-100 text-yellow-700'
+                                                    }`
+                                                }, comment.clientStatus)
+                                            )
+                                        )
+                                    )
+                                ))
+                            ),
+                            
+                            // Input Area
+                            React.createElement("div", { className: "communication-input-area border-t border-gray-200 p-4 bg-white" },
+                                loggedInUser && loggedInUser.userType !== 'client' ? (
+                                    React.createElement(React.Fragment, null,
+                                        React.createElement("select", {
+                                            value: communicationType,
+                                            onChange: (e) => setCommunicationType(e.target.value),
+                                            className: "w-full mb-2 px-3 py-2 border border-gray-300 rounded-lg"
+                                        },
+                                            React.createElement("option", { value: "" }, "Select Communication Type"),
+                                            React.createElement("option", { value: "Information" }, "Information"),
+                                            React.createElement("option", { value: "Review" }, "Review"),
+                                            React.createElement("option", { value: "Approval" }, "Approval")
+                                        ),
+                                        React.createElement("textarea", {
+                                            value: adminCommentText,
+                                            onChange: (e) => setAdminCommentText(e.target.value),
+                                            placeholder: "Type your message...",
+                                            className: "w-full mb-2 px-3 py-2 border border-gray-300 rounded-lg",
+                                            rows: 3
+                                        }),
+                                        React.createElement("input", {
+                                            type: "file",
+                                            multiple: true,
+                                            onChange: (e) => setAttachments(Array.from(e.target.files)),
+                                            className: "mb-2"
+                                        }),
+                                        React.createElement("button", {
+                                            onClick: handleAdminFileUpload,
+                                            disabled: isUploading || !adminCommentText.trim() || !communicationType,
+                                            className: "w-full px-4 py-2 bg-gradient-to-r from-blue-500 to-purple-600 text-white rounded-lg font-semibold hover:from-blue-600 hover:to-purple-700 transition-all disabled:opacity-50"
+                                        }, isUploading ? "Uploading..." : "Send")
+                                    )
+                                ) : (
+                                    selectedTask.clientComments && selectedTask.clientComments.filter(c => !c.clientStatus).map((comment, idx) => (
+                                        React.createElement("div", { key: idx, className: "mb-4" },
+                                            React.createElement("p", { className: "text-sm text-gray-600 mb-2" }, comment.adminComment),
+                                            React.createElement("select", {
+                                                value: selectedCommentForReply && selectedCommentForReply.id === comment.id ? selectedStatus : '',
+                                                onChange: (e) => {
+                                                    setSelectedCommentForReply(comment);
+                                                    setSelectedStatus(e.target.value);
+                                                },
+                                                className: "w-full mb-2 px-3 py-2 border border-gray-300 rounded-lg"
+                                            },
+                                                React.createElement("option", { value: "" }, "Select Response"),
+                                                React.createElement("option", { value: "Approved" }, "Approved"),
+                                                React.createElement("option", { value: "Rejected" }, "Rejected"),
+                                                React.createElement("option", { value: "Needs Revision" }, "Needs Revision")
+                                            ),
+                                            selectedCommentForReply && selectedCommentForReply.id === comment.id && (
+                                                React.createElement(React.Fragment, null,
+                                                    React.createElement("textarea", {
+                                                        value: clientCommentText,
+                                                        onChange: (e) => setClientCommentText(e.target.value),
+                                                        placeholder: "Add your comment...",
+                                                        className: "w-full mb-2 px-3 py-2 border border-gray-300 rounded-lg",
+                                                        rows: 2
+                                                    }),
+                                                    React.createElement("input", {
+                                                        type: "file",
+                                                        multiple: true,
+                                                        onChange: (e) => setAttachments(Array.from(e.target.files)),
+                                                        className: "mb-2"
+                                                    }),
+                                                    React.createElement("button", {
+                                                        onClick: handleClientResponse,
+                                                        disabled: isUploading || !selectedStatus,
+                                                        className: "w-full px-4 py-2 bg-gradient-to-r from-green-500 to-green-600 text-white rounded-lg font-semibold hover:from-green-600 hover:to-green-700 transition-all disabled:opacity-50"
+                                                    }, isUploading ? "Sending..." : "Send Response")
+                                                )
+                                            )
+                                        )
+                                    ))
+                                )
+                            )
+                        )
+                    ) : (
+                        React.createElement("div", { className: "flex-1 flex items-center justify-center text-gray-400" },
+                            React.createElement("p", null, "Select a task to view communication")
+                        )
+                    )
+                )
+            )
+        );
+    };
+</script>
+

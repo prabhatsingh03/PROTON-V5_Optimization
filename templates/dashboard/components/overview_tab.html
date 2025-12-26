@@ -1,0 +1,283 @@
+<script type="text/babel">
+    const OverviewTab = ({ tasks, dashboardData, selectedProject, onShowDetails, onEditTask, loggedInUserType }) => {
+        const { useMemo } = React;
+        
+        // Compute KPIs from tasks
+        const kpis = useMemo(() => {
+            if (!tasks || tasks.length === 0) {
+                return {
+                    overallProgress: 0,
+                    deadlineAdherence: 0,
+                    budgetStatus: 0,
+                    scopeChanges: 0,
+                    criticalTasks: 0,
+                    delayedTasks: 0,
+                    tasksDueSoon: []
+                };
+            }
+            
+            const flattenTasks = (taskList) => {
+                let flat = [];
+                taskList.forEach(task => {
+                    flat.push(task);
+                    if (task.subtasks && task.subtasks.length > 0) {
+                        flat = flat.concat(flattenTasks(task.subtasks));
+                    }
+                });
+                return flat;
+            };
+            
+            const allTasks = flattenTasks(tasks);
+            const totalTasks = allTasks.length;
+            
+            // Overall progress (weighted average)
+            let totalWeight = 0;
+            let weightedProgress = 0;
+            allTasks.forEach(task => {
+                const weight = parseFloat(task.weightage || 0);
+                const progress = parseFloat(task.progress || 0);
+                if (!isNaN(weight) && !isNaN(progress)) {
+                    totalWeight += weight;
+                    weightedProgress += progress * weight;
+                }
+            });
+            const overallProgress = totalWeight > 0 ? parseFloat((weightedProgress / totalWeight).toFixed(2)) : 0;
+            
+            // Deadline adherence (% on-time tasks)
+            const now = new Date();
+            const onTimeTasks = allTasks.filter(task => {
+                if (!task.plannedEndDate) return false;
+                const endDate = new Date(task.plannedEndDate);
+                const actualEnd = task.actualEndDate ? new Date(task.actualEndDate) : null;
+                if (actualEnd) {
+                    return actualEnd <= endDate;
+                }
+                return task.status === 'Completed' && endDate >= now;
+            }).length;
+            const deadlineAdherence = totalTasks > 0 ? parseFloat(((onTimeTasks / totalTasks) * 100).toFixed(2)) : 0;
+            
+            // Critical tasks count
+            const criticalTasks = allTasks.filter(t => t.isCritical).length;
+            
+            // Delayed tasks count
+            const delayedTasks = allTasks.filter(t => 
+                t.status === 'Delayed' || 
+                (t.delayWeatherDays || 0) > 0 || 
+                (t.delayContractorDays || 0) > 0 || 
+                (t.delayClientDays || 0) > 0
+            ).length;
+            
+            // Tasks due soon (next 7 days)
+            const sevenDaysFromNow = new Date();
+            sevenDaysFromNow.setDate(sevenDaysFromNow.getDate() + 7);
+            const tasksDueSoon = allTasks.filter(task => {
+                if (!task.plannedEndDate) return false;
+                const endDate = new Date(task.plannedEndDate);
+                return endDate >= now && endDate <= sevenDaysFromNow && task.status !== 'Completed';
+            }).slice(0, 10); // Limit to 10
+            
+            // Budget status (placeholder - would need budget data from dashboardData)
+            const budgetStatus = dashboardData && dashboardData.budget_status ? dashboardData.budget_status : 0;
+            
+            // Scope changes (placeholder - would need scope change tracking)
+            const scopeChanges = 0;
+            
+            return {
+                overallProgress,
+                deadlineAdherence,
+                budgetStatus,
+                scopeChanges,
+                criticalTasks,
+                delayedTasks,
+                tasksDueSoon
+            };
+        }, [tasks, dashboardData]);
+        
+        // Get delayed tasks with reasons
+        const delayedTasksWithReasons = useMemo(() => {
+            if (!tasks) return [];
+            const flattenTasks = (taskList) => {
+                let flat = [];
+                taskList.forEach(task => {
+                    flat.push(task);
+                    if (task.subtasks && task.subtasks.length > 0) {
+                        flat = flat.concat(flattenTasks(task.subtasks));
+                    }
+                });
+                return flat;
+            };
+            const allTasks = flattenTasks(tasks);
+            return allTasks.filter(t => 
+                t.status === 'Delayed' || 
+                (t.delayWeatherDays || 0) > 0 || 
+                (t.delayContractorDays || 0) > 0 || 
+                (t.delayClientDays || 0) > 0
+            ).map(t => ({
+                ...t,
+                delayReason: t.delayWeatherDays > 0 ? 'Weather' : 
+                            t.delayContractorDays > 0 ? 'Contractor' : 
+                            t.delayClientDays > 0 ? 'Client' : 'General'
+            })).slice(0, 10);
+        }, [tasks]);
+        
+        return React.createElement("div", { className: "overview-tab-container space-y-6" },
+            // Gradient Header Section
+            React.createElement("div", { className: "bg-gradient-to-r from-blue-500 to-purple-600 text-white p-6 rounded-xl shadow-lg" },
+                React.createElement("div", { className: "flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4" },
+                    React.createElement("div", null,
+                        React.createElement("h2", { className: "text-2xl font-bold mb-2" }, selectedProject || "Project Overview"),
+                        React.createElement("p", { className: "text-blue-100 text-sm" }, 
+                            "Last updated: ", new Date().toLocaleString()
+                        )
+                    ),
+                    React.createElement("div", { className: "flex gap-2" },
+                        React.createElement("span", { className: "px-3 py-1 bg-white/20 rounded-full text-sm font-semibold" },
+                            `${tasks ? tasks.length : 0} Tasks`
+                        ),
+                        React.createElement("span", { className: "px-3 py-1 bg-white/20 rounded-full text-sm font-semibold" },
+                            `${kpis.overallProgress}% Complete`
+                        )
+                    )
+                )
+            ),
+            
+            // KPI Cards Grid
+            React.createElement("div", { className: "overview-kpi-grid grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5" },
+                React.createElement("div", { className: "overview-kpi-card bg-white rounded-xl shadow-md overflow-hidden hover:shadow-xl transition-shadow" },
+                    React.createElement("div", { className: "bg-gradient-to-r from-green-400 to-green-600 text-white p-4 font-semibold" }, "Deadline Adherence"),
+                    React.createElement("div", { className: "p-6" },
+                        React.createElement("div", { className: "text-3xl font-bold text-gray-800 mb-2" }, `${kpis.deadlineAdherence}%`),
+                        React.createElement("div", { className: "w-full bg-gray-200 rounded-full h-3" },
+                            React.createElement("div", {
+                                className: "bg-gradient-to-r from-green-400 to-green-600 h-3 rounded-full transition-all",
+                                style: { width: `${kpis.deadlineAdherence}%` }
+                            })
+                        )
+                    )
+                ),
+                React.createElement("div", { className: "overview-kpi-card bg-white rounded-xl shadow-md overflow-hidden hover:shadow-xl transition-shadow" },
+                    React.createElement("div", { className: "bg-gradient-to-r from-blue-400 to-blue-600 text-white p-4 font-semibold" }, "Budget Status"),
+                    React.createElement("div", { className: "p-6" },
+                        React.createElement("div", { className: "text-3xl font-bold text-gray-800 mb-2" }, `${kpis.budgetStatus}%`),
+                        React.createElement("div", { className: "w-full bg-gray-200 rounded-full h-3" },
+                            React.createElement("div", {
+                                className: "bg-gradient-to-r from-blue-400 to-blue-600 h-3 rounded-full transition-all",
+                                style: { width: `${kpis.budgetStatus}%` }
+                            })
+                        )
+                    )
+                ),
+                React.createElement("div", { className: "overview-kpi-card bg-white rounded-xl shadow-md overflow-hidden hover:shadow-xl transition-shadow" },
+                    React.createElement("div", { className: "bg-gradient-to-r from-purple-400 to-purple-600 text-white p-4 font-semibold" }, "Scope Changes"),
+                    React.createElement("div", { className: "p-6" },
+                        React.createElement("div", { className: "text-3xl font-bold text-gray-800 mb-2" }, kpis.scopeChanges),
+                        React.createElement("p", { className: "text-sm text-gray-500 mt-2" }, "Change requests")
+                    )
+                ),
+                React.createElement("div", { className: "overview-kpi-card bg-white rounded-xl shadow-md overflow-hidden hover:shadow-xl transition-shadow" },
+                    React.createElement("div", { className: "bg-gradient-to-r from-red-400 to-red-600 text-white p-4 font-semibold" }, "Critical Tasks"),
+                    React.createElement("div", { className: "p-6" },
+                        React.createElement("div", { className: "text-3xl font-bold text-gray-800 mb-2" }, kpis.criticalTasks),
+                        React.createElement("p", { className: "text-sm text-gray-500 mt-2" }, "Require attention")
+                    )
+                )
+            ),
+            
+            // Two Column Layout for Tasks and Alerts
+            React.createElement("div", { className: "grid grid-cols-1 lg:grid-cols-2 gap-6" },
+                // Upcoming Tasks List
+                React.createElement("div", { className: "bg-white rounded-xl shadow-md overflow-hidden" },
+                    React.createElement("div", { className: "bg-gradient-to-r from-teal-500 to-blue-600 text-white p-4 font-semibold" }, "Tasks Due Soon"),
+                    React.createElement("div", { className: "p-4 max-h-96 overflow-y-auto" },
+                        kpis.tasksDueSoon.length > 0 ? (
+                            kpis.tasksDueSoon.map(task => (
+                                React.createElement("div", {
+                                    key: task.id,
+                                    className: "p-3 mb-2 border-b border-gray-100 hover:bg-gray-50 cursor-pointer rounded transition-colors",
+                                    onClick: () => onShowDetails(task)
+                                },
+                                    React.createElement("div", { className: "flex items-center justify-between" },
+                                        React.createElement("div", null,
+                                            React.createElement("span", { className: "text-xs font-mono text-gray-500" }, task.wbs),
+                                            React.createElement("p", { className: "font-semibold text-gray-800" }, task.taskName)
+                                        ),
+                                        React.createElement("span", { className: "text-xs text-gray-500" },
+                                            formatDateForDisplay(task.plannedEndDate)
+                                        )
+                                    ),
+                                    React.createElement("div", { className: "mt-2 flex items-center gap-2" },
+                                        React.createElement("span", {
+                                            className: `px-2 py-1 text-xs rounded-full ${
+                                                task.status === 'Completed' ? 'bg-green-100 text-green-700' :
+                                                task.status === 'In Progress' ? 'bg-blue-100 text-blue-700' :
+                                                'bg-gray-100 text-gray-700'
+                                            }`
+                                        }, task.status)
+                                    )
+                                )
+                            ))
+                        ) : (
+                            React.createElement("div", { className: "text-center py-8 text-gray-400" },
+                                React.createElement("p", null, "No tasks due soon")
+                            )
+                        )
+                    )
+                ),
+                
+                // Delay Alerts Section
+                React.createElement("div", { className: "bg-white rounded-xl shadow-md overflow-hidden" },
+                    React.createElement("div", { className: "bg-gradient-to-r from-orange-500 to-red-600 text-white p-4 font-semibold" }, "Delay Highlights"),
+                    React.createElement("div", { className: "p-4 max-h-96 overflow-y-auto" },
+                        delayedTasksWithReasons.length > 0 ? (
+                            delayedTasksWithReasons.map(task => (
+                                React.createElement("div", {
+                                    key: task.id,
+                                    className: "p-3 mb-2 border-l-4 rounded hover:bg-gray-50 cursor-pointer transition-colors",
+                                    style: {
+                                        borderColor: task.delayReason === 'Weather' ? '#fb923c' :
+                                                   task.delayReason === 'Contractor' ? '#f59e0b' :
+                                                   '#ef4444'
+                                    },
+                                    onClick: () => onEditTask(task)
+                                },
+                                    React.createElement("div", { className: "flex items-center justify-between mb-1" },
+                                        React.createElement("span", { className: "text-xs font-mono text-gray-500" }, task.wbs),
+                                        React.createElement("span", {
+                                            className: `px-2 py-1 text-xs rounded-full font-semibold ${
+                                                task.delayReason === 'Weather' ? 'bg-orange-100 text-orange-700' :
+                                                task.delayReason === 'Contractor' ? 'bg-amber-100 text-amber-700' :
+                                                'bg-red-100 text-red-700'
+                                            }`
+                                        }, task.delayReason)
+                                    ),
+                                    React.createElement("p", { className: "font-semibold text-gray-800" }, task.taskName),
+                                    React.createElement("p", { className: "text-xs text-gray-500 mt-1" },
+                                        `Weather: ${task.delayWeatherDays || 0}d | `,
+                                        `Contractor: ${task.delayContractorDays || 0}d | `,
+                                        `Client: ${task.delayClientDays || 0}d`
+                                    )
+                                )
+                            ))
+                        ) : (
+                            React.createElement("div", { className: "text-center py-8 text-gray-400" },
+                                React.createElement("p", null, "No delayed tasks")
+                            )
+                        )
+                    )
+                )
+            ),
+            
+            // Trend Chart
+            React.createElement("div", { className: "bg-white rounded-xl shadow-md overflow-hidden" },
+                React.createElement("div", { className: "bg-gradient-to-r from-teal-500 to-blue-600 text-white p-4 font-semibold" }, "Progress Timeline"),
+                React.createElement("div", { className: "p-6" },
+                    React.createElement("canvas", {
+                        id: "overview-progress-chart",
+                        className: "w-full h-64"
+                    })
+                )
+            )
+        );
+    };
+</script>
+

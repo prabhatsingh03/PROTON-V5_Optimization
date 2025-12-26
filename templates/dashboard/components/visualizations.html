@@ -1,0 +1,389 @@
+<script type="text/babel">
+
+        const GanttChart = ({ tasks }) => {
+            const { useState, useMemo, useCallback } = React;
+            const DAY_WIDTH = 30;
+            const GANTT_CHART_AREA_ID = "gantt-chart-render-area";
+            const [tooltip, setTooltip] = useState({ visible: false, content: null, x: 0, y: 0 });
+            const flattenedTasks = useMemo(() => {
+                const visibleTasks = [];
+                const getVisibleTasks = (tasksToProcess) => {
+                    if (!tasksToProcess) return;
+                    tasksToProcess.forEach(task => {
+                        visibleTasks.push(task);
+                        if (task.isExpanded && task.subtasks && task.subtasks.length > 0) {
+                            getVisibleTasks(task.subtasks);
+                        }
+                    });
+                };
+                getVisibleTasks(tasks);
+                return visibleTasks;
+            }, [tasks]);
+            const handleMouseEnter = (event, task, segmentType = 'main') => {
+                let details = [
+                    React.createElement("p", { key: "name" }, React.createElement("strong", null, "Task: "), task.taskName),
+                    React.createElement("p", { key: "wbs" }, React.createElement("strong", null, "WBS: "), task.wbs),
+                    React.createElement("p", { key: "planned" }, React.createElement("strong", null, "Planned: "), `${formatDateForDisplay(task.plannedStartDate)} - ${formatDateForDisplay(task.plannedEndDate)}`),
+                    React.createElement("p", { key: "status" }, React.createElement("strong", null, "Status: "), task.status),
+                    React.createElement("p", { key: "progress" }, React.createElement("strong", null, "Progress: "), `${task.progress || 0}%`)
+                ];
+                if (task.delayWeatherDays > 0) { details.push(React.createElement("p", { key: "Weather" }, React.createElement("strong", null, "Weather Delay: "), `${task.delayWeatherDays} day(s)`)); }
+                if (task.delayContractorDays > 0) { details.push(React.createElement("p", { key: "contractor" }, React.createElement("strong", null, "Contractor Delay: "), `${task.delayContractorDays} day(s)`)); }
+                if (task.delayClientDays > 0) { details.push(React.createElement("p", { key: "client" }, React.createElement("strong", null, "Client Delay: "), `${task.delayClientDays} day(s)`)); }
+                if (segmentType === 'Weather') { details.push(React.createElement("p", { key: "segtype", className: "mt-1 pt-1 border-t border-slate-500 text-sky-300" }, "Segment: Weather Delay")); }
+                else if (segmentType === 'contractor') { details.push(React.createElement("p", { key: "segtype", className: "mt-1 pt-1 border-t border-slate-500 text-amber-300" }, "Segment: Contractor Delay")); }
+                else if (segmentType === 'Client') { details.push(React.createElement("p", { key: "segtype", className: "mt-1 pt-1 border-t border-slate-500 text-red-300" }, "Segment: Client Delay")); }
+                const content = React.createElement("div", null, ...details);
+                setTooltip({ visible: true, content: content, x: event.clientX + 15, y: event.clientY + 15 });
+            };
+            const handleMouseLeave = () => { setTooltip({ visible: false, content: null, x: 0, y: 0 }); };
+            const { projectStartDate, totalDays, timelineUnits } = useMemo(() => {
+                if (!flattenedTasks || flattenedTasks.length === 0) return { projectStartDate: null, totalDays: 0, timelineUnits: [] };
+                let minDate = null, maxDate = null;
+                flattenedTasks.forEach(task => {
+                    if (task.plannedStartDate) { const d = new Date(task.plannedStartDate + 'T00:00:00Z'); if (!minDate || d < minDate) minDate = d; }
+                    if (task.plannedEndDate) {
+                        let effectiveEndDate = new Date(task.plannedEndDate + 'T00:00:00Z');
+                        effectiveEndDate.setDate(effectiveEndDate.getDate() + (task.delayWeatherDays || 0) + (task.delayContractorDays || 0) + (task.delayClientDays || 0));
+                        if (!maxDate || effectiveEndDate > maxDate) maxDate = effectiveEndDate;
+                    }
+                });
+                if (!minDate || !maxDate) return { projectStartDate: null, totalDays: 0, timelineUnits: [] };
+                const pStartDate = new Date(minDate); const pEndDate = new Date(maxDate);
+                pEndDate.setDate(pEndDate.getDate() + 1);
+                const tDays = Math.max(1, Math.ceil(Math.abs(pEndDate - pStartDate) / (1000 * 60 * 60 * 24)));
+                const units = []; let currentDate = new Date(pStartDate);
+                for (let i = 0; i < tDays; i++) {
+                    units.push({ date: new Date(currentDate), label: currentDate.toLocaleDateString('en-US', { day: 'numeric', timeZone: 'UTC' }), monthLabel: i === 0 || currentDate.getDate() === 1 ? currentDate.toLocaleDateString('en-US', { month: 'short', year: '2-digit', timeZone: 'UTC' }) : null, });
+                    currentDate.setDate(currentDate.getDate() + 1);
+                }
+                return { projectStartDate: pStartDate, totalDays: tDays, timelineUnits: units };
+            }, [flattenedTasks]);
+            if (!projectStartDate) return React.createElement("div", { className: "text-center text-gray-400 py-4" }, "Not enough data for Gantt chart.");
+            const getBarColorClass = (status) => `gantt-bar-${String(status || 'Not Started').replace(/\s+/g, '-')}`;
+            return (
+                React.createElement("div", { id: GANTT_CHART_AREA_ID, className: "gantt-chart-container" },
+                    React.createElement("div", { className: "gantt-timeline-header", style: { width: `${210 + totalDays * DAY_WIDTH}px` } },
+                        timelineUnits.map((unit, index) => (
+                            React.createElement("div", { key: index, className: "gantt-timeline-unit", style: { width: `${DAY_WIDTH}px` } },
+                                unit.monthLabel && React.createElement("div", { style: { position: 'absolute', top: '-18px', left: `${index * DAY_WIDTH}px`, fontWeight: 'bold', fontSize: '0.65rem' } }, unit.monthLabel),
+                                unit.label
+                            )
+                        ))
+                    ),
+                    flattenedTasks.map(task => {
+                        if (!task.plannedStartDate || !task.plannedEndDate) return null;
+                        const taskStartDate = new Date(task.plannedStartDate + 'T00:00:00Z');
+                        const taskPlannedEndDate = new Date(task.plannedEndDate + 'T00:00:00Z');
+                        if (isNaN(taskStartDate.getTime()) || isNaN(taskPlannedEndDate.getTime())) return null;
+                        const startOffsetDays = Math.max(0, Math.ceil((taskStartDate - projectStartDate) / (1000 * 60 * 60 * 24)));
+                        const plannedDurationDays = Math.max(1, Math.ceil((taskPlannedEndDate - taskStartDate) / (1000 * 60 * 60 * 24)) + 1);
+                        const weatherDelay = task.delayWeatherDays || 0; const contractorDelay = task.delayContractorDays || 0; const clientDelay = task.delayClientDays || 0;
+                        const plannedWidth = plannedDurationDays * DAY_WIDTH; const weatherDelayWidth = weatherDelay * DAY_WIDTH; const contractorDelayWidth = contractorDelay * DAY_WIDTH; const clientDelayWidth = clientDelay * DAY_WIDTH;
+                        let mainBarWidth = plannedWidth;
+                        const barSegments = [];
+                        if (mainBarWidth > 0) {
+                            barSegments.push(
+                                React.createElement("div", {
+                                    key: `${task.id}-main`, className: `gantt-bar-segment ${getBarColorClass(task.status)} ${task.isCritical ? 'is-critical' : ''}`, style: { width: `${mainBarWidth}px` },
+                                    onMouseEnter: (e) => handleMouseEnter(e, task, 'main'), onMouseLeave: handleMouseLeave, title: `${task.taskName} (Planned)`
+                                }, task.wbs)
+                            );
+                        }
+                        if (weatherDelay > 0) {
+                            barSegments.push(
+                                React.createElement("div", {
+                                    key: `${task.id}-weather`, className: `gantt-bar-segment gantt-bar-delay-Weather ${task.isCritical ? 'is-critical' : ''}`, style: { width: `${weatherDelayWidth}px` },
+                                    onMouseEnter: (e) => handleMouseEnter(e, task, 'Weather'), onMouseLeave: handleMouseLeave, title: `${task.taskName} (Weather Delay: ${weatherDelay}d)`
+                                })
+                            );
+                        }
+                        if (contractorDelay > 0) {
+                            barSegments.push(
+                                React.createElement("div", {
+                                    key: `${task.id}-contractor`, className: `gantt-bar-segment gantt-bar-delay-contractor ${task.isCritical ? 'is-critical' : ''}`, style: { width: `${contractorDelayWidth}px` },
+                                    onMouseEnter: (e) => handleMouseEnter(e, task, 'contractor'), onMouseLeave: handleMouseLeave, title: `${task.taskName} (Contractor Delay: ${contractorDelay}d)`
+                                })
+                            );
+                        }
+                        if (clientDelay > 0) {
+                            barSegments.push(
+                                React.createElement("div", {
+                                    key: `${task.id}-client`, className: `gantt-bar-segment gantt-bar-delay-Client ${task.isCritical ? 'is-critical' : ''}`, style: { width: `${clientDelayWidth}px` },
+                                    onMouseEnter: (e) => handleMouseEnter(e, task, 'Client'), onMouseLeave: handleMouseLeave, title: `${task.taskName} (Client Delay: ${clientDelay}d)`
+                                })
+                            );
+                        }
+                        return (
+                            React.createElement("div", { key: task.id, className: "gantt-row" },
+                                React.createElement("div", { className: "gantt-task-name-column", title: task.taskName }, task.taskName),
+                                React.createElement("div", { className: "gantt-bars-area", style: { width: `${totalDays * DAY_WIDTH}px` } },
+                                    React.createElement("div", { className: "flex absolute", style: { left: `${startOffsetDays * DAY_WIDTH}px`, top: '2.5px', height: '20px' } }, ...barSegments)
+                                )
+                            )
+                        );
+                    }).filter(Boolean),
+                    tooltip.visible && React.createElement("div", { className: "gantt-tooltip", style: { top: `${tooltip.y}px`, left: `${tooltip.x}px` } }, tooltip.content)
+                )
+            );
+        };
+
+        const Chatbot = ({ projectTasks, projectName }) => {
+            const { useState, useEffect, useRef } = React;
+            const [isOpen, setIsOpen] = useState(false);
+            const [messages, setMessages] = useState([]);
+            const [inputValue, setInputValue] = useState('');
+            const [isLoading, setIsLoading] = useState(false);
+            const [isTranslating, setIsTranslating] = useState(false);
+            const [retryStatus, setRetryStatus] = useState(null);
+            const messagesEndRef = useRef(null);
+            const typingIntervalRef = useRef(null);
+            const [currentLanguage, setCurrentLanguage] = useState('English');
+            const [uiTranslations, setUiTranslations] = useState({
+                header: 'PROTON AI',
+                placeholder: 'Ask about the project...',
+                suggestions: 'Suggestions',
+                critical_activities_query: 'What are Critical Activities?',
+                progress_query: 'Overall Project Progress',
+                risk_query: 'Risk Assessment & Mitigation Ideas',
+            });
+            const LANGUAGES = {
+                'English': 'en', 'Japanese': 'ja', 'French': 'fr', 'Spanish': 'es', 'Russian': 'ru', 'Mandarin': 'zh', 'Korean': 'ko', 'Kannada': 'kn', 'Hindi': 'hi', 'Gujarati': 'gu', 'Marathi': 'mr', 'Odia': 'or', 'Telugu': 'te', 'Malayalam': 'ml', 'Tamil': 'ta', 'Bengali': 'bn'
+            };
+            const englishDefaults = {
+                header: 'PROTON AI',
+                placeholder: 'Ask about the project...',
+                suggestions: 'Suggestions',
+                critical_activities_query: 'What are Critical Activities?',
+                progress_query: 'Overall Project Progress',
+                risk_query: 'Risk Assessment & Mitigation Ideas',
+                greeting_template: `Hi, how can I help you with the "${projectName}" project today?'`
+            };
+            const predefinedQueryKeys = ["critical_activities_query", "progress_query", "risk_query"];
+            const scrollToBottom = () => {
+                messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+            };
+            useEffect(scrollToBottom, [messages]);
+            useEffect(() => {
+                return () => {
+                    if (typingIntervalRef.current) {
+                        clearInterval(typingIntervalRef.current);
+                    }
+                };
+            }, []);
+            useEffect(() => {
+                if (!isOpen) return;
+                setIsTranslating(true);
+                const translateAndSetGreeting = async () => {
+                    const targetLangCode = LANGUAGES[currentLanguage];
+                    try {
+                        let finalTranslations;
+                        if (!targetLangCode || targetLangCode === 'en') {
+                            finalTranslations = englishDefaults;
+                        } else {
+                            // Proactive check for AI prompt limits
+                            const usage = window.latestUsageStats;
+                            if (usage && usage.at_limit && usage.at_limit.ai_prompts) {
+                                throw new Error('You have reached your weekly AI prompt limit.');
+                            }
+                            const response = await makeAuthenticatedRequest('/api/translate', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                    texts: englishDefaults,
+                                    target_lang: targetLangCode
+                                })
+                            });
+                            if (!response.ok) throw new Error(`Server error: ${response.status}`);
+                            const data = await response.json();
+                            if (data.status === 'success') {
+                                finalTranslations = data.translations;
+                            } else {
+                                throw new Error(data.message);
+                            }
+                        }
+                        setUiTranslations(finalTranslations);
+                        const greeting = (finalTranslations.greeting_template || englishDefaults.greeting_template)
+                            .replace('{projectName}', projectName || 'project');
+                        setMessages([{ role: 'model', text: greeting }]);
+                    } catch (error) {
+                        console.error("Error fetching translations:", error);
+                        setUiTranslations(englishDefaults);
+                        const greeting = englishDefaults.greeting_template.replace('{projectName}', projectName || 'project');
+                        setMessages([{ role: 'model', text: greeting }]);
+                    } finally {
+                        setIsTranslating(false);
+                    }
+                };
+                translateAndSetGreeting();
+            }, [currentLanguage, projectName, isOpen]);
+            const sendQuery = async (queryText) => {
+                if (!queryText.trim() || isLoading) return;
+                if (typingIntervalRef.current) {
+                    clearInterval(typingIntervalRef.current);
+                }
+                const userMessage = { role: 'user', text: queryText };
+                setMessages(prev => [...prev, userMessage]);
+                setInputValue('');
+                setIsLoading(true);
+                const summarizeTasksForAI = (tasksToSummarize) => {
+                    let summarizedData = [];
+                    const processTask = (task) => {
+                        summarizedData.push({
+                            wbs: task.wbs, name: task.taskName, status: task.status,
+                            progress: task.progress, planned_start: task.plannedStartDate,
+                            planned_end: task.plannedEndDate, is_critical: task.isCritical,
+                            predecessors: task.predecessorString
+                        });
+                        if (task.subtasks) task.subtasks.forEach(processTask);
+                    };
+                    tasksToSummarize.forEach(processTask);
+                    return JSON.stringify(summarizedData);
+                };
+                const projectContext = `
+             You are a helpful project assistant for the "${projectName}" project.
+            You must provide response in the "${currentLanguage}" language.
+            The Response should have word limit of 100-150 words.
+            Here is a summary of the current project tasks:
+            ${summarizeTasksForAI(projectTasks)}
+            ---
+            INSTRUCTIONS:
+            1. Format every response using simple Markdown headings, bold, bullets.
+            2. NEVER mention the parameter names. For example, do not say "based on the data" or "the 'is_critical' parameter is true". Simply state the facts naturally.
+            3. If it is not related to provided data, clearly state that but if the question is related to Project Management in general, you can use your general knowledge.`;
+                const chatHistory = [
+                    { role: "user", parts: [{ text: projectContext }] },
+                    { role: "model", parts: [{ text: "Understood." }] },
+                    ...[...messages, userMessage].map(msg => ({
+                        role: msg.role,
+                        parts: [{ text: msg.text }]
+                    }))
+                ];
+                try {
+                    const payload = { contents: chatHistory, use_chatbot_key: true };
+                    
+                    const result = await retryApiCall(async () => {
+                        const response = await makeAuthenticatedRequest('/api/gemini/generate-content', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload)
+                        });
+                        if (!response.ok) throw new Error(`API request failed: ${response.status}`);
+                        return await response.json();
+                    }, 3, 1000, (attempt, maxRetries) => {
+                        setRetryStatus(`Retrying... (${attempt}/${maxRetries})`);
+                    });
+                    
+                    const modelResponse = result.candidates?.[0]?.content?.parts?.[0]?.text || "Sorry, I couldn't process that.";
+                    setIsLoading(false);
+                    setMessages(prev => [...prev, { role: 'model', text: '' }]);
+                    let charIndex = 0;
+                    typingIntervalRef.current = setInterval(() => {
+                        if (charIndex < modelResponse.length) {
+                            setMessages(prev => {
+                                const newMessages = [...prev];
+                                const lastMessage = newMessages[newMessages.length - 1];
+                                if (lastMessage && lastMessage.role === 'model') {
+                                    lastMessage.text = modelResponse.substring(0, charIndex + 1);
+                                }
+                                return newMessages;
+                            });
+                            charIndex++;
+                        } else {
+                            clearInterval(typingIntervalRef.current);
+                        }
+                    }, 20);
+                } catch (error) {
+                    console.error("Error calling Gemini API:", error);
+                    setIsLoading(false);
+                    setRetryStatus(null);
+                    setMessages(prev => [...prev, { role: 'model', text: `Sorry, an error occurred: ${error.message}` }]);
+                }
+            };
+            const handleSendMessage = (e) => {
+                e.preventDefault();
+                sendQuery(inputValue);
+            };
+            const LoadingPlaceholder = ({ className = 'w-24 h-4' }) => {
+                return React.createElement('div', { className: `bg-slate-200 rounded pulse-bg ${className}` });
+            };
+            return React.createElement('div', { className: 'chatbot-container' },
+                React.createElement('div', { className: `chat-window ${!isOpen ? 'closed' : ''}` },
+                    React.createElement('div', { className: 'chat-header' },
+                        React.createElement('span', null, isTranslating ? React.createElement(LoadingPlaceholder, { className: 'w-20 h-5' }) : uiTranslations.header),
+                        React.createElement('select', {
+                            value: currentLanguage,
+                            onChange: (e) => setCurrentLanguage(e.target.value),
+                            disabled: isTranslating,
+                            className: 'bg-blue-800 text-white text-xs rounded p-1 focus:outline-none cursor-pointer disabled:opacity-50'
+                        },
+                            Object.keys(LANGUAGES).map(lang => React.createElement('option', { key: lang, value: lang }, lang))
+                        ),
+                        React.createElement('button', { onClick: () => setIsOpen(false) }, '×')
+                    ),
+                    React.createElement('div', { className: 'chat-messages' },
+                        messages.map((msg, index) => {
+                            if (index === 0 && isTranslating) {
+                                return React.createElement('div', { key: 'translating-loader', className: 'chat-message model' },
+                                    React.createElement(LoadingPlaceholder, { className: 'w-48 h-5' })
+                                );
+                            }
+                            return React.createElement('div', { key: index, className: `chat-message ${msg.role}` },
+                                msg.role === 'model' ? React.createElement(SimpleMarkdownRenderer, { text: msg.text }) : msg.text
+                            );
+                        }),
+                        messages.length === 1 && !isLoading && !isTranslating && (
+                            React.createElement('div', { className: 'flex flex-col items-center gap-2 p-2' },
+                                React.createElement('p', { className: 'text-xs text-slate-500 mb-1' }, uiTranslations.suggestions),
+                                predefinedQueryKeys.map(queryKey => (
+                                    React.createElement('button', {
+                                        key: queryKey,
+                                        onClick: () => sendQuery(uiTranslations[queryKey]),
+                                        className: 'w-full text-center px-3 py-1.5 bg-slate-100 text-slate-700 rounded-lg text-sm hover:bg-slate-200 transition-colors border border-slate-200'
+                                    }, uiTranslations[queryKey])
+                                ))
+                            )
+                        ),
+                        isLoading && React.createElement('div', { className: 'chat-message model' },
+                            React.createElement('div', { className: 'flex items-center gap-2' },
+                                React.createElement('div', { className: 'w-2 h-2 bg-slate-400 rounded-full animate-pulse' }),
+                                React.createElement('div', { className: 'w-2 h-2 bg-slate-400 rounded-full animate-pulse delay-75' }),
+                                React.createElement('div', { className: 'w-2 h-2 bg-slate-400 rounded-full animate-pulse delay-150' })
+                            ),
+                            retryStatus && React.createElement('div', { className: 'text-sm text-amber-600 mt-2' }, retryStatus)
+                        ),
+                        React.createElement('div', { ref: messagesEndRef })
+                    ),
+                    React.createElement('form', { className: 'chat-input-form', onSubmit: handleSendMessage },
+                        React.createElement('input', {
+                            type: 'text',
+                            placeholder: isTranslating ? 'Loading...' : uiTranslations.placeholder,
+                            value: inputValue,
+                            onChange: (e) => setInputValue(e.target.value),
+                            disabled: isLoading || isTranslating
+                        }),
+                        React.createElement('button', { type: 'submit', disabled: isLoading || isTranslating || !inputValue.trim() },
+                            React.createElement(SendIcon, { size: 16 })
+                        )
+                    )
+                ),
+                React.createElement('button', {
+                    className: 'chatbot-toggle-button chatbot-fab help-chat-button',
+                    onClick: () => setIsOpen(prev => !prev)
+                }, React.createElement(ChatIcon, { size: 28 }))
+            );
+        };
+
+        const imageToBase64 = async (url) => {
+            const response = await fetch(url);
+            const blob = await response.blob();
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onloadend = () => resolve(reader.result);
+                reader.onerror = reject;
+                reader.readAsDataURL(blob);
+            });
+        };
+
+</script>
+

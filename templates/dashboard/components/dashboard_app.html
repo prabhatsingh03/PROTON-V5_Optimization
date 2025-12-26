@@ -1,0 +1,775 @@
+<script type="text/babel">
+    const DashboardApp = () => {
+        const { useState, useEffect, useCallback, useMemo } = React;
+
+        // --- Core state (simplified for portfolio-level dashboard) ---
+        const [loggedInUser, setLoggedInUser] = useState(null);
+        const [isLoading, setIsLoading] = useState(true);
+        const [appError, setAppError] = useState(null);
+        const [notification, setNotification] = useState(null);
+        const [projects, setProjects] = useState([]);
+        const [trialStatus, setTrialStatus] = useState(null);
+        const [isTrialBannerDismissed, setIsTrialBannerDismissed] = useState(false);
+        const isTrialExpired = !!(trialStatus && trialStatus.is_trial && trialStatus.is_expired);
+
+        // New: portfolio-level aggregates across all projects
+        const [portfolioSummary, setPortfolioSummary] = useState({
+            projectCount: 0,
+            avgProgress: 0,
+            avgPlannedProgress: 0,
+            totalDelayDays: 0,
+            avgDelayPerProject: 0,
+            highRiskProjects: 0,
+            onTrackProjects: 0
+        });
+        const [portfolioProgressBands, setPortfolioProgressBands] = useState({
+            low: 0,
+            medium: 0,
+            high: 0,
+            complete: 0
+        });
+        const [portfolioDelayMix, setPortfolioDelayMix] = useState({
+            weather: 0,
+            contractor: 0,
+            client: 0
+        });
+        const [isPortfolioLoading, setIsPortfolioLoading] = useState(false);
+
+        const [showSubscriptionManagement, setShowSubscriptionManagement] = useState(false);
+        const [showTutorial, setShowTutorial] = useState(false);
+        const [tutorialSteps, setTutorialSteps] = useState([
+            {
+                id: "step1",
+                title: "Step 1 — Add Project",
+                body: "Create a new project here. Click 'Add Project' to start managing a new project workspace.",
+                selector: ".btn-add-project, #add-project, .add-project-btn",
+                placement: "bottom"
+            },
+            {
+                id: "step2",
+                title: "Step 2 — Import CSV",
+                body: "Import tasks or bulk data quickly using the CSV importer. Use this to set up tasks in bulk.",
+                selector: ".import-csv-btn, #importCSV, .btn-import-csv",
+                placement: "bottom"
+            },
+            {
+                id: "step3",
+                title: "Step 3 — Overall Project Progress",
+                body: "Monitor actual vs planned progress here — the progress bar gives you a quick health snapshot of your project.",
+                selector: ".overall-project-progress, .progress-bar, #project-progress",
+                placement: "bottom"
+            },
+            {
+                id: "step4",
+                title: "Step 4 — Action Buttons for Tasks",
+                body: "Use quick actions to comment, edit, move or delete tasks. These action buttons let you manage tasks fast.",
+                selector: ".task-actions, .actions-cell, .task-row .actions",
+                placement: "left"
+            },
+            {
+                id: "step5",
+                title: "Step 5 — Gantt Chart",
+                body: "View the Gantt chart to see task timelines and dependencies. Toggle this view to analyze schedules.",
+                selector: ".gantt-toggle, #ganttChart, .export-gantt",
+                placement: "right"
+            },
+            {
+                id: "step6",
+                title: "Step 6 — AI Risk Assessment",
+                body: "AI-powered risk detection highlights tasks with potential schedule or cost risks. Check the risk card for insights.",
+                selector: ".ai-risk-card, #riskAssessment, .risk-widget",
+                placement: "right"
+            },
+            {
+                id: "step7",
+                title: "Step 7 — Chatbot",
+                body: "Ask the virtual assistant questions about project status, find tasks or request reports using the chatbot.",
+                selector: ".chatbot-fab, #chatbot, .help-chat-button",
+                placement: "left"
+            },
+            {
+                id: "step8",
+                title: "Step 8 — Activity Log",
+                body: "See an audit trail of changes and recent actions in the activity log for compliance and tracking.",
+                selector: ".activity-log, #activityLog, .activity-button",
+                placement: "left",
+                adminOnly: true
+            },
+            {
+                id: "step9",
+                title: "Step 9 — Add Users (Admins Only)",
+                body: "Invite team members and assign roles. Only available to organization admins.",
+                selector: ".btn-add-user, #addUser, .manage-users-btn",
+                placement: "bottom",
+                adminOnly: true
+            }
+        ]);
+
+        // --- Helpers copied from App (main_app.html) ---
+        const getRoleBadge = (role) => {
+            const badges = {
+                'super_admin': { label: 'Super Admin', color: 'bg-purple-100 text-purple-700' },
+                'org_admin': { label: 'Org Admin', color: 'bg-blue-100 text-blue-700' },
+                'org_user': { label: 'User', color: 'bg-green-100 text-green-700' },
+                'client': { label: 'Client', color: 'bg-slate-100 text-slate-700' }
+            };
+            const badge = badges[role] || badges['org_user'];
+            return React.createElement('span', {
+                className: `px-2 py-1 text-xs font-semibold rounded-full ${badge.color}`
+            }, badge.label);
+        };
+
+        const getWelcomeMessage = (role) => {
+            const messages = {
+                'super_admin': 'Welcome, Super Admin! You have full system access.',
+                'org_admin': 'Welcome, Organization Admin! Manage your team and projects.',
+                'org_user': 'Welcome! View and update your assigned tasks.',
+                'client': 'Welcome! View your project deliverables.'
+            };
+            return messages[role] || 'Welcome to PROTON!';
+        };
+
+        // --- Authentication & initial load (same as App, but without task-loading) ---
+        useEffect(() => {
+            const accessToken = localStorage.getItem('access_token');
+            const userData = localStorage.getItem('user_data');
+
+            if (accessToken && userData) {
+                try {
+                    const authData = JSON.parse(userData);
+
+                    let userRole = 'org_user';
+                    let orgId = null;
+                    let plan = null;
+
+                    try {
+                        const payload = accessToken.split('.')[1];
+                        const decodedPayload = JSON.parse(decodeBase64Url(payload));
+                        userRole = decodedPayload.role || 'org_user';
+                        orgId = decodedPayload.org_id || null;
+                        plan = decodedPayload.plan || null;
+                    } catch (jwtError) {
+                        console.warn('Failed to parse JWT token:', jwtError);
+                        if (authData.userType === 'admin') {
+                            userRole = 'org_admin';
+                        }
+                    }
+
+                    const enhancedAuthData = {
+                        ...authData,
+                        role: userRole,
+                        org_id: orgId,
+                        plan: plan
+                    };
+
+                    setLoggedInUser(enhancedAuthData);
+                    try {
+                        window.loggedInUser = enhancedAuthData;
+                        window.showNotification = ({ message, type = 'info', action, duration }) => {
+                            setNotification({ message, type, action, duration });
+                        };
+                    } catch (e) { }
+                } catch (e) {
+                    localStorage.removeItem('access_token');
+                    localStorage.removeItem('refresh_token');
+                    localStorage.removeItem('user_data');
+                }
+            } else {
+                localStorage.removeItem('aiProjectControlTowerAuth_v2');
+                setIsLoading(false);
+            }
+        }, []);
+
+        useEffect(() => {
+            if (loggedInUser) {
+                setIsLoading(true);
+                makeAuthenticatedRequest('/api/projects', { method: 'GET', headers: { 'Content-Type': 'application/json' } })
+                    .then(res => res.json())
+                    .then(data => {
+                        // Handle error responses (non-array) and ensure projects is always an array
+                        if (Array.isArray(data)) {
+                            setProjects(data);
+                        } else if (data && data.status === 'error') {
+                            console.error('Projects API error:', data.message);
+                            setAppError(data.message || 'Could not load projects list.');
+                            setProjects([]);
+                        } else {
+                            setProjects([]);
+                        }
+                    })
+                    .catch(err => {
+                        setAppError('Could not load projects list.');
+                        setProjects([]);
+                    })
+                    .finally(() => {
+                        setIsLoading(false);
+                    });
+            }
+        }, [loggedInUser]);
+
+        useEffect(() => {
+            if (loggedInUser && loggedInUser.role !== 'super_admin' && loggedInUser.userType !== 'client') {
+                makeAuthenticatedRequest('/api/org/trial-status', {
+                    method: 'GET',
+                    headers: { 'Content-Type': 'application/json' }
+                })
+                    .then(res => res.json())
+                    .then(data => {
+                        if (data.status === 'success') {
+                            setTrialStatus(data);
+                        }
+                    })
+                    .catch(err => {
+                        console.error('Failed to fetch trial status:', err);
+                    });
+
+                const dismissed = sessionStorage.getItem('trial_banner_dismissed') === 'true';
+                setIsTrialBannerDismissed(dismissed);
+            }
+        }, [loggedInUser]);
+
+        // --- Portfolio aggregation helpers ---
+        const loadPortfolioSummary = useCallback(async (projectList) => {
+            if (!projectList || projectList.length === 0) {
+                setPortfolioSummary({
+                    projectCount: 0,
+                    avgProgress: 0,
+                    totalDelayDays: 0,
+                    avgDelayPerProject: 0,
+                    highRiskProjects: 0,
+                    onTrackProjects: 0
+                });
+                setPortfolioProgressBands({ low: 0, medium: 0, high: 0, complete: 0 });
+                setPortfolioDelayMix({ weather: 0, contractor: 0, client: 0 });
+                return;
+            }
+
+            setIsPortfolioLoading(true);
+            try {
+                const summaries = [];
+                for (const proj of projectList) {
+                    try {
+                        const res = await makeAuthenticatedRequest(`/api/chart_data?project=${encodeURIComponent(proj.name)}`, {
+                            method: 'GET',
+                            headers: { 'Content-Type': 'application/json' }
+                        });
+                        const data = await res.json();
+                        summaries.push({
+                            progress: data.overall_actual_progress || 0,
+                            plannedProgress: data.overall_planned_progress || 0,
+                            delays: data.total_delays || { weather: 0, contractor: 0, client: 0 }
+                        });
+                    } catch (e) {
+                        // Skip projects that fail to load
+                    }
+                }
+
+                if (summaries.length === 0) {
+                    setPortfolioSummary({
+                        projectCount: projectList.length,
+                        avgProgress: 0,
+                        avgPlannedProgress: 0,
+                        totalDelayDays: 0,
+                        avgDelayPerProject: 0,
+                        highRiskProjects: 0,
+                        onTrackProjects: 0
+                    });
+                    setPortfolioProgressBands({ low: 0, medium: 0, high: 0, complete: 0 });
+                    setPortfolioDelayMix({ weather: 0, contractor: 0, client: 0 });
+                    return;
+                }
+
+                let totalProgress = 0;
+                let totalPlannedProgress = 0;
+                let totalDelayDays = 0;
+                let highRisk = 0;
+                let onTrack = 0;
+                const bands = { low: 0, medium: 0, high: 0, complete: 0 };
+                const delayMix = { weather: 0, contractor: 0, client: 0 };
+
+                summaries.forEach(s => {
+                    const p = Math.max(0, Math.min(100, Number(s.progress) || 0));
+                    totalProgress += p;
+                    const pp = Math.max(0, Math.min(100, Number(s.plannedProgress) || 0));
+                    totalPlannedProgress += pp;
+
+                    if (p < 40) bands.low += 1;
+                    else if (p < 70) bands.medium += 1;
+                    else if (p < 100) bands.high += 1;
+                    else bands.complete += 1;
+
+                    const d = s.delays || {};
+                    const weather = Number(d.weather || 0);
+                    const contractor = Number(d.contractor || 0);
+                    const client = Number(d.client || 0);
+                    const projectDelay = weather + contractor + client;
+                    totalDelayDays += projectDelay;
+
+                    delayMix.weather += weather;
+                    delayMix.contractor += contractor;
+                    delayMix.client += client;
+
+                    if (projectDelay > 15 || p < 50) {
+                        highRisk += 1;
+                    } else if (projectDelay <= 5 && p >= 70) {
+                        onTrack += 1;
+                    }
+                });
+
+                const avgProgress = totalProgress / summaries.length;
+                const avgPlannedProgress = totalPlannedProgress / summaries.length;
+                const avgDelayPerProject = totalDelayDays / summaries.length;
+
+                setPortfolioSummary({
+                    projectCount: projectList.length,
+                    avgProgress: Math.round(avgProgress),
+                    avgPlannedProgress: Math.round(avgPlannedProgress),
+                    totalDelayDays: Math.round(totalDelayDays),
+                    avgDelayPerProject: Math.round(avgDelayPerProject * 10) / 10,
+                    highRiskProjects: highRisk,
+                    onTrackProjects: onTrack
+                });
+                setPortfolioProgressBands(bands);
+                setPortfolioDelayMix(delayMix);
+            } finally {
+                setIsPortfolioLoading(false);
+            }
+        }, []);
+
+        useEffect(() => {
+            if (loggedInUser && projects && projects.length > 0) {
+                loadPortfolioSummary(projects);
+            }
+        }, [loggedInUser, projects, loadPortfolioSummary]);
+
+        useEffect(() => {
+            if (appError) { const timer = setTimeout(() => setAppError(null), 7000); return () => clearTimeout(timer); }
+        }, [appError]);
+
+        // --- Trial banner handlers ---
+        const handleDismissTrialBanner = () => {
+            setIsTrialBannerDismissed(true);
+            sessionStorage.setItem('trial_banner_dismissed', 'true');
+        };
+
+        const handleTrialUpgrade = () => {
+            setShowSubscriptionManagement(true);
+        };
+
+        // Helper function to fetch trial status (used by subscription modal)
+        const fetchTrialStatus = useCallback(() => {
+            if (!loggedInUser || loggedInUser.role === 'super_admin' || loggedInUser.userType === 'client') {
+                return;
+            }
+
+            makeAuthenticatedRequest('/api/org/trial-status', {
+                method: 'GET',
+                headers: { 'Content-Type': 'application/json' }
+            })
+                .then(res => res.json())
+                .then(data => {
+                    if (data.status === 'success') {
+                        setTrialStatus(data);
+                    }
+                })
+                .catch(err => console.error('Failed to fetch trial status:', err));
+        }, [loggedInUser]);
+
+        // --- KPI calculations (portfolio-level only, no task/WBS details) ---
+        const kpiData = useMemo(() => {
+            const healthBase = portfolioSummary.avgProgress;
+            const delayPenalty = Math.min(30, portfolioSummary.avgDelayPerProject * 2);
+
+            let health = healthBase - delayPenalty;
+            health = Math.max(0, Math.min(100, health));
+
+            return {
+                portfolioHealth: Math.round(health)
+            };
+        }, [portfolioSummary]);
+
+        const getHealthStatus = (value) => {
+            if (value >= 80) return { label: 'Excellent', color: 'from-emerald-400 to-emerald-600' };
+            if (value >= 60) return { label: 'Good', color: 'from-sky-400 to-sky-600' };
+            if (value >= 40) return { label: 'Fair', color: 'from-amber-400 to-amber-600' };
+            return { label: 'Poor', color: 'from-rose-400 to-rose-600' };
+        };
+
+        // --- Sub-components for layout ---
+        const KPICard = ({ title, value, label, gradientClass, trend }) => {
+            return React.createElement("div", { className: "kpi-card card-gradient" },
+                React.createElement("div", { className: `kpi-card-header ${gradientClass}` }, title),
+                React.createElement("div", { className: "kpi-card-body" },
+                    React.createElement("div", { className: "kpi-value" }, value),
+                    label && React.createElement("div", { className: "kpi-label" }, label),
+                    trend && React.createElement("div", { className: `kpi-trend ${trend.type === 'positive' ? 'positive' : 'negative'}` },
+                        trend.type === 'positive' ? "▲ " : "▼ ",
+                        trend.text
+                    )
+                )
+            );
+        };
+
+        const PortfolioHealthBar = () => {
+            const planned = (projects.length || 0) === 0 ? 0 : portfolioSummary.avgPlannedProgress;
+            const actual = (projects.length || 0) === 0 ? 0 : portfolioSummary.avgProgress;
+
+            return React.createElement("div", { className: "portfolio-health-bar" },
+                React.createElement("div", { className: "flex items-center justify-between mb-3" },
+                    React.createElement("div", null,
+                        React.createElement("h2", { className: "text-lg font-semibold text-slate-900" }, "Portfolio Health"),
+                        React.createElement("p", { className: "text-sm text-slate-500" }, "Average Actual vs. Planned Progress")
+                    ),
+                    React.createElement("div", { className: "flex items-center gap-3 text-sm" },
+                        React.createElement("div", { className: "flex items-center gap-1.5" },
+                            React.createElement("div", { className: "w-3 h-3 rounded-full bg-emerald-500" }),
+                            React.createElement("span", { className: "font-semibold text-slate-700" }, `Actual: ${actual}%`)
+                        ),
+                        React.createElement("div", { className: "flex items-center gap-1.5" },
+                            React.createElement("div", { className: "w-3 h-3 rounded-full bg-blue-300" }),
+                            React.createElement("span", { className: "font-medium text-slate-600" }, `Planned: ${planned}%`)
+                        )
+                    )
+                ),
+                React.createElement("div", { className: "relative w-full h-6 bg-slate-100 rounded-full overflow-hidden shadow-inner" },
+                    // Planned Progress (Background Layer)
+                    React.createElement("div", {
+                        className: "absolute top-0 left-0 h-full bg-blue-300 transition-all duration-500",
+                        style: { width: `${planned}%` }
+                    }),
+                    // Actual Progress (Foreground Layer)
+                    React.createElement("div", {
+                        className: "absolute top-0 left-0 h-full bg-emerald-500 transition-all duration-500 shadow-sm",
+                        style: { width: `${actual}%` }
+                    }),
+                    // Planned Marker (Visible when Actual >= Planned to show the target line)
+                    actual >= planned && planned > 0 && React.createElement("div", {
+                        className: "absolute top-0 bottom-0 w-0.5 bg-blue-600 z-10",
+                        style: { left: `${planned}%` }
+                    })
+                )
+            );
+        };
+
+        const RecentActivityPanel = () => {
+            // Intentionally kept high-level – no task names or WBS
+            if (!projects || projects.length === 0) {
+                return React.createElement("div", { className: "dashboard-section" },
+                    React.createElement("div", { className: "flex items-center justify-between mb-4" },
+                        React.createElement("h3", { className: "text-sm font-semibold text-slate-900" }, "Portfolio Signals"),
+                        React.createElement("span", { className: "text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-500" }, "No projects yet")
+                    ),
+                    React.createElement("div", {
+                        className: "rounded-2xl border border-dashed border-slate-200 bg-gradient-to-r from-slate-50 to-slate-100 px-4 py-6 flex items-center justify-between"
+                    },
+                        React.createElement("div", { className: "flex items-center gap-3" },
+                            React.createElement("div", { className: "w-10 h-10 rounded-full bg-sky-100 flex items-center justify-center text-sky-600 text-xl" }, "+"),
+                            React.createElement("div", null,
+                                React.createElement("p", { className: "text-sm font-semibold text-slate-800" }, "Start building your portfolio"),
+                                React.createElement("p", { className: "text-xs text-slate-500" }, "Create projects to unlock portfolio insights and visuals.")
+                            )
+                        )
+                    )
+                );
+            }
+
+            const signalCards = [
+                {
+                    label: "Total Projects",
+                    value: portfolioSummary.projectCount,
+                    subtitle: "Active projects in this portfolio",
+                    icon: "📁",
+                    gradient: "from-sky-500/10 to-sky-500/5 border-sky-500/20",
+                    pill: "Scale"
+                },
+                {
+                    label: "Average Progress",
+                    value: `${portfolioSummary.avgProgress}%`,
+                    subtitle: "Mean completion across all projects",
+                    icon: "📈",
+                    gradient: "from-emerald-500/10 to-emerald-500/5 border-emerald-500/20",
+                    pill: "Execution"
+                },
+                {
+                    label: "Total Delay Days",
+                    value: portfolioSummary.totalDelayDays,
+                    subtitle: "Weather, contractor & client combined",
+                    icon: "⏱",
+                    gradient: "from-amber-500/10 to-amber-500/5 border-amber-500/20",
+                    pill: "Schedule"
+                },
+                {
+                    label: "High-Risk Projects",
+                    value: portfolioSummary.highRiskProjects,
+                    subtitle: "Projects needing leadership attention",
+                    icon: "⚠️",
+                    gradient: "from-rose-500/10 to-rose-500/5 border-rose-500/20",
+                    pill: "Risk"
+                },
+                {
+                    label: "On-track Projects",
+                    value: portfolioSummary.onTrackProjects,
+                    subtitle: "Healthy projects with low delay",
+                    icon: "✅",
+                    gradient: "from-teal-500/10 to-teal-500/5 border-teal-500/20",
+                    pill: "Health"
+                }
+            ];
+
+            return React.createElement("div", { className: "dashboard-section" },
+                React.createElement("div", { className: "flex items-center justify-between mb-4" },
+                    React.createElement("div", null,
+                        React.createElement("h3", { className: "text-sm font-semibold text-slate-900" }, "Portfolio Signals"),
+                        React.createElement("p", { className: "text-xs text-slate-500 mt-0.5" }, "Compact view of portfolio health across all projects")
+                    ),
+                    React.createElement("span", { className: "text-[11px] px-2 py-0.5 rounded-full bg-slate-900 text-slate-100 uppercase tracking-wide" }, "Overview")
+                ),
+                React.createElement("div", {
+                    className: "grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3"
+                },
+                    signalCards.map((card, idx) =>
+                        React.createElement("div", {
+                            key: idx,
+                            className: `rounded-2xl border bg-gradient-to-br ${card.gradient} px-4 py-3 flex items-start gap-3 shadow-sm`
+                        },
+                            React.createElement("div", { className: "mt-0.5 w-8 h-8 rounded-xl bg-white/70 flex items-center justify-center text-base" }, card.icon),
+                            React.createElement("div", { className: "flex-1 min-w-0" },
+                                React.createElement("div", { className: "flex items-center justify-between gap-2" },
+                                    React.createElement("p", { className: "text-[11px] font-semibold uppercase tracking-wide text-slate-500" }, card.label),
+                                    React.createElement("span", { className: "text-[10px] px-2 py-0.5 rounded-full bg-white/70 text-slate-600" }, card.pill)
+                                ),
+                                React.createElement("div", { className: "mt-1 flex items-baseline gap-1" },
+                                    React.createElement("span", { className: "text-lg font-bold text-slate-900" }, card.value),
+                                    React.createElement("span", { className: "text-[11px] text-slate-500 truncate" }, card.subtitle)
+                                )
+                            )
+                        )
+                    )
+                )
+            );
+        };
+
+        // --- Mini charts (using Chart.js via refs) for portfolio-level view ---
+        const progressBandsChartRef = React.useRef(null);
+        const delayMixChartRef = React.useRef(null);
+
+        useEffect(() => {
+            if (!projects || projects.length === 0) return;
+
+            if (progressBandsChartRef.current) {
+                const ctx = progressBandsChartRef.current.getContext('2d');
+                if (progressBandsChartRef.current._chart) {
+                    progressBandsChartRef.current._chart.destroy();
+                }
+
+                const labels = ['0–40%', '40–70%', '70–99%', '100%'];
+                const values = [
+                    portfolioProgressBands.low,
+                    portfolioProgressBands.medium,
+                    portfolioProgressBands.high,
+                    portfolioProgressBands.complete
+                ];
+
+                const chart = new Chart(ctx, {
+                    type: 'bar',
+                    data: {
+                        labels,
+                        datasets: [{
+                            data: values,
+                            backgroundColor: ['#f97316', '#eab308', '#22c55e', '#0ea5e9']
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: { display: false }
+                        },
+                        scales: {
+                            y: {
+                                beginAtZero: true,
+                                ticks: { precision: 0 }
+                            }
+                        }
+                    }
+                });
+                progressBandsChartRef.current._chart = chart;
+            }
+
+            if (delayMixChartRef.current) {
+                const ctx = delayMixChartRef.current.getContext('2d');
+                if (delayMixChartRef.current._chart) {
+                    delayMixChartRef.current._chart.destroy();
+                }
+
+                const totalDelay = portfolioDelayMix.weather + portfolioDelayMix.contractor + portfolioDelayMix.client;
+                if (totalDelay === 0) {
+                    const chart = new Chart(ctx, {
+                        type: 'doughnut',
+                        data: {
+                            labels: ['No delays'],
+                            datasets: [{
+                                data: [1],
+                                backgroundColor: ['#e5e7eb']
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            plugins: {
+                                legend: { display: false }
+                            }
+                        }
+                    });
+                    delayMixChartRef.current._chart = chart;
+                    return;
+                }
+
+                const chart = new Chart(ctx, {
+                    type: 'doughnut',
+                    data: {
+                        labels: ['Weather', 'Contractor', 'Client'],
+                        datasets: [{
+                            data: [
+                                portfolioDelayMix.weather,
+                                portfolioDelayMix.contractor,
+                                portfolioDelayMix.client
+                            ],
+                            backgroundColor: ['#0ea5e9', '#f97316', '#ef4444']
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: { position: 'bottom' }
+                        }
+                    }
+                });
+                delayMixChartRef.current._chart = chart;
+            }
+        }, [projects, portfolioProgressBands, portfolioDelayMix]);
+
+        // --- Render ---
+        if (isLoading && !loggedInUser) {
+            return React.createElement(LoadingSpinner, { message: "Authenticating..." });
+        }
+
+        return React.createElement("div", {
+            className: `min-h-screen bg-slate-100 p-4 md:p-6 font-sans ${trialStatus && trialStatus.is_trial && (!isTrialBannerDismissed || trialStatus.is_expired) ? 'pt-20' : ''}`
+        },
+            loggedInUser && loggedInUser.role !== 'super_admin' && loggedInUser.userType !== 'client' && trialStatus &&
+            React.createElement(TrialCountdownBanner, {
+                trialStatus: trialStatus,
+                onUpgradeClick: handleTrialUpgrade,
+                onDismiss: handleDismissTrialBanner,
+                isDismissed: isTrialBannerDismissed
+            }),
+
+            React.createElement("div", { className: "dashboard-grid" },
+                React.createElement("section", { className: "portfolio-section" },
+                    React.createElement(PortfolioHealthBar, null)
+                ),
+
+                React.createElement("section", { className: "kpi-grid" },
+                    React.createElement(KPICard, {
+                        title: "Projects in Portfolio",
+                        value: projects.length || 0,
+                        label: "Total active projects in this workspace",
+                        gradientClass: "bg-gradient-to-r from-sky-500 to-indigo-500"
+                    }),
+                    React.createElement(KPICard, {
+                        title: "Average Portfolio Progress",
+                        value: (projects.length || 0) === 0 ? "—" : portfolioSummary.avgProgress + "%",
+                        label: "Mean actual progress across all projects",
+                        gradientClass: "bg-gradient-to-r from-emerald-500 to-teal-500"
+                    }),
+                    React.createElement(KPICard, {
+                        title: "Average Delay / Project",
+                        value: (projects.length || 0) === 0 ? "—" : portfolioSummary.avgDelayPerProject + " days",
+                        label: "Average total delay days per project",
+                        gradientClass: "bg-gradient-to-r from-amber-500 to-orange-500"
+                    }),
+                    React.createElement(KPICard, {
+                        title: "High-Risk Projects",
+                        value: portfolioSummary.highRiskProjects || 0,
+                        label: "Projects with high delay or low progress",
+                        gradientClass: "bg-gradient-to-r from-rose-500 to-red-500"
+                    })
+                ),
+
+                React.createElement("section", { className: "dashboard-section flex flex-wrap gap-3 items-center justify-between" },
+                    React.createElement("div", { className: "flex flex-wrap gap-2" },
+                        React.createElement("button", {
+                            className: `btn-gradient-primary rounded-full px-5 py-2 text-sm flex items-center gap-2 ${isTrialExpired ? 'opacity-50 cursor-not-allowed' : ''}`,
+                            onClick: () => !isTrialExpired && setShowSubscriptionManagement(true),
+                            disabled: isTrialExpired
+                        }, "Manage Subscription"),
+                        React.createElement("a", {
+                            href: "/dashboard/projects",
+                            className: "btn-gradient-secondary rounded-full px-5 py-2 text-sm flex items-center gap-2"
+                        }, "Open Project Workspaces"),
+                        React.createElement("a", {
+                            href: "/dashboard/reports",
+                            className: "btn-gradient-secondary rounded-full px-5 py-2 text-sm flex items-center gap-2"
+                        }, "View Detailed Analytics")
+                    ),
+                    loggedInUser && React.createElement("div", { className: "flex items-center gap-3 text-sm text-slate-600" },
+                        React.createElement("span", null, loggedInUser.email),
+                        getRoleBadge(loggedInUser.role)
+                    )
+                ),
+
+                React.createElement(RecentActivityPanel, null),
+
+                React.createElement("section", { className: "grid grid-cols-1 md:grid-cols-2 gap-4" },
+                    React.createElement("div", { className: "mini-chart-container" },
+                        React.createElement("div", { className: "mini-chart-header" },
+                            React.createElement("div", { className: "mini-chart-title" }, "Project Progress Bands"),
+                            React.createElement("span", { className: "text-xs text-slate-400" }, "How projects are distributed by completion")
+                        ),
+                        React.createElement("div", { className: "mini-chart-canvas" },
+                            (projects.length || 0) === 0
+                                ? React.createElement("p", { className: "text-sm text-slate-500" }, "Add projects to see progress distribution.")
+                                : React.createElement("canvas", { ref: progressBandsChartRef })
+                        )
+                    ),
+                    React.createElement("div", { className: "mini-chart-container" },
+                        React.createElement("div", { className: "mini-chart-header" },
+                            React.createElement("div", { className: "mini-chart-title" }, "Delay Mix Across Portfolio"),
+                            React.createElement("span", { className: "text-xs text-slate-400" }, "Share of delay days by cause")
+                        ),
+                        React.createElement("div", { className: "mini-chart-canvas" },
+                            (projects.length || 0) === 0
+                                ? React.createElement("p", { className: "text-sm text-slate-500" }, "Delay patterns will appear as projects progress.")
+                                : React.createElement("canvas", { ref: delayMixChartRef })
+                        )
+                    )
+                )
+            ),
+
+            showSubscriptionManagement && React.createElement(SubscriptionManagementModal, {
+                onClose: () => setShowSubscriptionManagement(false),
+                loggedInUser: loggedInUser,
+                onSubscriptionUpdated: () => {
+                    if (typeof window.refreshUsageStats === 'function') window.refreshUsageStats();
+                    fetchTrialStatus();
+                    setIsTrialBannerDismissed(false);
+                    sessionStorage.removeItem('trial_banner_dismissed');
+                }
+            }),
+            showTutorial && React.createElement(OnboardingTutorial, {
+                steps: tutorialSteps,
+                isAdmin: window.__IS_ADMIN__ || false,
+                onComplete: () => { setShowTutorial(false); },
+                onSkip: () => { setShowTutorial(false); }
+            }),
+
+            notification && React.createElement(NotificationToast, { message: notification.message, type: notification.type, onDismiss: () => setNotification(null) }),
+            appError && React.createElement("div", { className: "mb-4 p-3 bg-red-100 border border-red-300 text-red-700 rounded-lg text-sm", role: "alert" },
+                React.createElement("strong", null, "Error: "),
+                appError
+            )
+        );
+    };
+</script>

@@ -1,0 +1,1168 @@
+<script type="text/babel">
+    // Admin Panel App Component - Integrates all admin functionality
+    const AdminPanelApp = () => {
+        const { useState, useEffect, useCallback } = React;
+
+        // Authentication state
+        const [loggedInUser, setLoggedInUser] = useState(null);
+        const [isLoading, setIsLoading] = useState(true);
+        const [error, setError] = useState(null);
+
+        // Tab state
+        const getInitialTab = () => {
+            const urlParams = new URLSearchParams(window.location.search);
+            const tabParam = urlParams.get('tab');
+            const validTabs = ['users', 'settings', 'subscription', 'logs', 'approvals'];
+            return validTabs.includes(tabParam) ? tabParam : 'users';
+        };
+        const [activeTab, setActiveTab] = useState(getInitialTab);
+
+        // Data state
+        const [pendingAdmins, setPendingAdmins] = useState([]);
+        const [users, setUsers] = useState([]);
+        const [subscription, setSubscription] = useState(null);
+        const [activityLogs, setActivityLogs] = useState([]);
+        const [notifications, setNotifications] = useState(null);
+        const [isLoadingData, setIsLoadingData] = useState(false);
+
+        // Subscription tab state
+        const [subscriptionTab, setSubscriptionTab] = useState('overview');
+        const [billingHistory, setBillingHistory] = useState([]);
+        const [billingPagination, setBillingPagination] = useState({ page: 1, limit: 10, total_pages: 1, total_count: 0 });
+        const [selPlan, setSelPlan] = useState('si_plus');
+        const [selUsers, setSelUsers] = useState(1);
+        const [selCycle, setSelCycle] = useState('monthly');
+        const [isUpgrading, setIsUpgrading] = useState(false);
+        const [lastRequestId, setLastRequestId] = useState(null);
+        const [lastRequestParams, setLastRequestParams] = useState(null);
+
+        // User management form state
+        const [showCreateForm, setShowCreateForm] = useState(false);
+        const [editingUser, setEditingUser] = useState(null);
+        const [formData, setFormData] = useState({ email: '', password: '', role: 'org_user', status: 'approved' });
+        const [orgAdminCount, setOrgAdminCount] = useState(0);
+
+        // Helper functions
+        const canManageUsers = (role) => ['super_admin', 'org_admin'].includes(role);
+        const isSuperAdmin = (role) => role === 'super_admin';
+
+        const getRoleBadge = (role) => {
+            const badges = {
+                'super_admin': { label: 'Super Admin', color: 'bg-purple-100 text-purple-700' },
+                'org_admin': { label: 'Org Admin', color: 'bg-blue-100 text-blue-700' },
+                'org_user': { label: 'User', color: 'bg-green-100 text-green-700' },
+                'client': { label: 'Client', color: 'bg-slate-100 text-slate-700' }
+            };
+            const badge = badges[role] || badges['org_user'];
+            return React.createElement('span', {
+                className: `px-2 py-1 text-xs font-semibold rounded-full ${badge.color}`
+            }, badge.label);
+        };
+
+        const handleAPIError = (response, data) => {
+            if (response && response.status === 403) {
+                const errorMsg = data?.message || 'You do not have permission to perform this action.';
+                setError(errorMsg);
+                if (errorMsg.includes('Maximum 2 org admins')) {
+                    // Keep form open so user can select different role
+                }
+                return true;
+            }
+            return false;
+        };
+
+        // JWT Authentication Helper Functions (copied from charts.html)
+        function isTokenExpired(token) {
+            if (!token) return true;
+            try {
+                let payload = token.split('.')[1];
+                payload = payload.replace(/-/g, '+').replace(/_/g, '/');
+                while (payload.length % 4) { payload += '='; }
+                const decoded = JSON.parse(atob(payload));
+                if (decoded.exp) {
+                    const expDate = new Date(decoded.exp * 1000);
+                    return expDate < new Date();
+                }
+                return false;
+            } catch { return true; }
+        }
+
+        function handleSessionTimeout() {
+            localStorage.removeItem('access_token');
+            localStorage.removeItem('refresh_token');
+            localStorage.removeItem('user_data');
+            localStorage.removeItem('aiProjectControlTowerAuth_v2');
+            window.location.href = '/';
+        }
+
+        const refreshAccessToken = async () => {
+            const refreshToken = localStorage.getItem('refresh_token');
+            if (!refreshToken) { handleSessionTimeout(); return false; }
+            try {
+                const response = await fetch('/api/refresh', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ refresh_token: refreshToken })
+                });
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data && data.access_token) {
+                        localStorage.setItem('access_token', data.access_token);
+                        return true;
+                    }
+                }
+                handleSessionTimeout();
+                return false;
+            } catch { handleSessionTimeout(); return false; }
+        };
+
+        const makeAuthenticatedRequest = async (url, options = {}) => {
+            let accessToken = localStorage.getItem('access_token');
+            if (isTokenExpired(accessToken)) {
+                const newToken = await refreshAccessToken();
+                if (!newToken || isTokenExpired(newToken)) {
+                    throw new Error('Session expired');
+                }
+                accessToken = localStorage.getItem('access_token');
+            }
+            if (!options.headers) { options.headers = {}; }
+            options.headers['Authorization'] = 'Bearer ' + accessToken;
+            let response = await fetch(url, options);
+            if (response.status === 401) {
+                const refreshSuccess = await refreshAccessToken();
+                if (refreshSuccess) {
+                    const newAccessToken = localStorage.getItem('access_token');
+                    if (newAccessToken && !isTokenExpired(newAccessToken)) {
+                        options.headers['Authorization'] = 'Bearer ' + newAccessToken;
+                        response = await fetch(url, options);
+                    } else {
+                        throw new Error('Session expired');
+                    }
+                } else {
+                    throw new Error('Session expired');
+                }
+            }
+            return response;
+        };
+
+        // Authentication check
+        useEffect(() => {
+            const accessToken = localStorage.getItem('access_token');
+            const userData = localStorage.getItem('user_data');
+            if (!accessToken || !userData) {
+                window.location.href = '/';
+                return;
+            }
+            if (isTokenExpired(accessToken)) {
+                handleSessionTimeout();
+                return;
+            }
+            try {
+                const authData = JSON.parse(userData);
+
+                // Robust JWT payload decoding (matches global decodeBase64Url logic)
+                const jwtParts = accessToken.split('.');
+                if (jwtParts.length !== 3) {
+                    throw new Error('Invalid JWT format');
+                }
+                let payload = jwtParts[1].replace(/-/g, '+').replace(/_/g, '/');
+                while (payload.length % 4) {
+                    payload += '=';
+                }
+                const decoded = JSON.parse(atob(payload));
+
+                authData.role = decoded.role || authData.userType;
+                authData.org_id = decoded.org_id;
+
+                // Role check - only super_admin and org_admin can access
+                if (authData.role !== 'super_admin' && authData.role !== 'org_admin') {
+                    window.location.href = '/dashboard';
+                    return;
+                }
+
+                setLoggedInUser(authData);
+
+                // Update role badge in header
+                const roleBadgeText = document.getElementById('role-badge-text');
+                if (roleBadgeText) {
+                    roleBadgeText.textContent = authData.role === 'super_admin' ? 'Super Admin' : 'Org Admin';
+                }
+            } catch (e) {
+                handleSessionTimeout();
+            }
+            setIsLoading(false);
+        }, []);
+
+        // Listen for tab change events
+        useEffect(() => {
+            const handleTabChangeEvent = (event) => {
+                if (event.detail && event.detail.tab) {
+                    setActiveTab(event.detail.tab);
+                }
+            };
+            window.addEventListener('adminTabChange', handleTabChangeEvent);
+            return () => window.removeEventListener('adminTabChange', handleTabChangeEvent);
+        }, []);
+
+        // Fetch pending admins
+        const fetchPendingAdmins = useCallback(async () => {
+            try {
+                const response = await makeAuthenticatedRequest('/api/org/users', {
+                    method: 'GET',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                const data = await response.json();
+                if (data.status === 'success') {
+                    const pending = data.users.filter(u => u.status === 'pending');
+                    setPendingAdmins(pending);
+                    // Show/hide approvals tab
+                    const approvalsTab = document.getElementById('approvals-tab');
+                    if (approvalsTab) {
+                        approvalsTab.style.display = pending.length > 0 ? 'block' : 'none';
+                    }
+                }
+            } catch (err) {
+                console.error('Failed to fetch pending admins:', err);
+            }
+        }, []);
+
+        // Fetch users
+        const fetchUsers = useCallback(async () => {
+            setIsLoadingData(true);
+            try {
+                const response = await makeAuthenticatedRequest('/api/org/users', {
+                    method: 'GET',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                const data = await response.json();
+                if (handleAPIError(response, data)) return;
+                if (data.status === 'success') {
+                    setUsers(data.users);
+                    // Calculate org_admin count
+                    const adminCount = data.users.filter(u => u.role === 'org_admin').length;
+                    setOrgAdminCount(adminCount);
+                } else {
+                    setError(data.message || 'Failed to fetch users');
+                }
+            } catch (err) {
+                setError(err.message);
+            } finally {
+                setIsLoadingData(false);
+            }
+        }, []);
+
+        // User management handlers
+        const handleCreateUser = useCallback(async () => {
+            // Proactive check for admin limits
+            const usage = window.latestUsageStats;
+            if (usage && usage.at_limit && usage.at_limit.users) {
+                setError('You have reached the maximum number of team members for your plan.');
+                if (typeof window.refreshUsageStats === 'function') window.refreshUsageStats();
+                return;
+            }
+            try {
+                const response = await makeAuthenticatedRequest('/api/org/users', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(formData)
+                });
+                const data = await response.json();
+                if (handleAPIError(response, data)) return;
+                if (data.status === 'success') {
+                    fetchUsers();
+                    setShowCreateForm(false);
+                    setFormData({ email: '', password: '', role: 'org_user', status: 'approved' });
+                    handleUserCreated();
+                } else {
+                    setError(data.message || 'Failed to create user');
+                }
+            } catch (error) {
+                console.error('Error creating user:', error);
+                setError('Failed to create user');
+            }
+        }, [formData, fetchUsers, handleUserCreated]);
+
+        const handleUpdateUser = useCallback(async () => {
+            if (!editingUser) return;
+            try {
+                const response = await makeAuthenticatedRequest(`/api/org/users/${editingUser.id}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(formData)
+                });
+                const data = await response.json();
+                if (handleAPIError(response, data)) return;
+                if (data.status === 'success') {
+                    fetchUsers();
+                    setEditingUser(null);
+                    setFormData({ email: '', password: '', role: 'org_user', status: 'approved' });
+                    handleUserUpdated();
+                } else {
+                    setError(data.message || 'Failed to update user');
+                }
+            } catch (error) {
+                console.error('Error updating user:', error);
+                setError('Failed to update user');
+            }
+        }, [editingUser, formData, fetchUsers, handleUserUpdated]);
+
+        const handleChangeRole = useCallback(async (userId, newRole) => {
+            const user = users.find(u => u.id === userId);
+            if (!user) return;
+
+            // Client-side validation: Check org_admin limit
+            if (newRole === 'org_admin' && user.role !== 'org_admin' && loggedInUser.role !== 'super_admin' && orgAdminCount >= 2) {
+                setError('Maximum 2 org admins allowed. Please change an existing admin\'s role first.');
+                return;
+            }
+
+            try {
+                const response = await makeAuthenticatedRequest(`/api/org/users/${userId}/role`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ role: newRole })
+                });
+                const data = await response.json();
+                if (handleAPIError(response, data)) return;
+                if (data.status === 'success') {
+                    fetchUsers();
+                    setError('');
+                } else {
+                    setError(data.message || 'Failed to change role');
+                }
+            } catch (error) {
+                console.error('Error changing role:', error);
+                setError('Failed to change role');
+            }
+        }, [users, loggedInUser, orgAdminCount, fetchUsers]);
+
+        const resetForm = useCallback(() => {
+            setFormData({ email: '', password: '', role: 'org_user', status: 'approved' });
+            setError('');
+        }, []);
+
+        // Fetch subscription
+        const fetchSubscription = useCallback(async () => {
+            setIsLoadingData(true);
+            setError('');
+            try {
+                const response = await makeAuthenticatedRequest('/api/org/subscription', {
+                    method: 'GET',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                const data = await response.json();
+                if (data.status === 'success') {
+                    setSubscription(data.subscription);
+                    if (data.subscription) {
+                        setSelUsers(data.subscription.user_count || 1);
+                        setSelCycle(data.subscription.billing_cycle || 'monthly');
+                    }
+                    fetchBillingHistory(1, {});
+                } else {
+                    setError(data.message || 'Failed to fetch subscription');
+                }
+            } catch (err) {
+                setError('Failed to fetch subscription');
+            } finally {
+                setIsLoadingData(false);
+            }
+        }, []);
+
+        // Fetch billing history
+        const fetchBillingHistory = useCallback(async (page = 1, filters = {}) => {
+            try {
+                const qp = new URLSearchParams({ page, limit: 10, ...filters });
+                const response = await makeAuthenticatedRequest(`/api/org/billing/history?${qp.toString()}`, {
+                    method: 'GET',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                const data = await response.json();
+                if (data.status === 'success') {
+                    setBillingHistory(data.transactions || []);
+                    setBillingPagination(data.pagination || { page, limit: 10, total_pages: 1, total_count: 0 });
+
+                    // Calculate summary stats
+                    const totalPaid = (data.transactions || []).filter(tx => tx.status === 'success').reduce((sum, tx) => sum + (parseFloat(tx.amount) || 0), 0);
+                    const lastPayment = (data.transactions || []).filter(tx => tx.status === 'success').sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
+                    const failedCount = (data.transactions || []).filter(tx => tx.status === 'failed').length;
+
+                    // Update summary cards
+                    setTimeout(() => {
+                        const totalPaidEl = document.getElementById('bh-total-paid');
+                        const lastPaymentEl = document.getElementById('bh-last-payment');
+                        const failedEl = document.getElementById('bh-failed');
+                        if (totalPaidEl) totalPaidEl.textContent = `₹${totalPaid.toLocaleString('en-IN')}`;
+                        if (lastPaymentEl) lastPaymentEl.textContent = lastPayment ? `₹${parseFloat(lastPayment.amount).toLocaleString('en-IN')}` : '—';
+                        if (failedEl) failedEl.textContent = failedCount.toString();
+                    }, 100);
+                }
+            } catch (err) {
+                console.error('Failed to fetch billing history:', err);
+            }
+        }, []);
+
+        // Subscription handlers
+        const handleUpgrade = useCallback(async (newPlanType, userCount, billingCycle) => {
+            if (isUpgrading) return;
+            setError('');
+            setIsUpgrading(true);
+            const generateFallbackUUID = () => 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
+                const r = Math.random() * 16 | 0;
+                const v = c === 'x' ? r : (r & 0x3 | 0x8);
+                return v.toString(16);
+            });
+            const shouldReuseKey = lastRequestId && lastRequestParams && lastRequestParams.plan === newPlanType && lastRequestParams.users === userCount && lastRequestParams.cycle === billingCycle;
+            const idempotencyKey = shouldReuseKey ? lastRequestId : ((window.crypto && window.crypto.randomUUID) ? window.crypto.randomUUID() : generateFallbackUUID());
+            if (!shouldReuseKey) {
+                setLastRequestId(idempotencyKey);
+                setLastRequestParams({ plan: newPlanType, users: userCount, cycle: billingCycle });
+            }
+            try {
+                const response = await makeAuthenticatedRequest('/api/org/subscription/upgrade', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        new_plan_type: newPlanType,
+                        user_count: userCount,
+                        billing_cycle: billingCycle,
+                        idempotency_key: idempotencyKey
+                    })
+                });
+                const data = await response.json();
+                const resolvedRequestId = data.request_id || idempotencyKey;
+                setLastRequestId(resolvedRequestId);
+                setLastRequestParams({ plan: newPlanType, users: userCount, cycle: billingCycle });
+                if (data.status === 'success') {
+                    if (data.requires_payment) {
+                        if (window.openRazorpayCheckout) {
+                            window.openRazorpayCheckout(data);
+                        }
+                    } else {
+                        setNotifications({ message: 'Subscription upgrade already processed. No additional payment is required.', type: 'success' });
+                        setLastRequestId(null);
+                        setLastRequestParams(null);
+                        fetchSubscription();
+                    }
+                } else {
+                    const message = data.message || (response.status === 409 ? 'Payment already in progress. Please wait.' : 'Failed to upgrade subscription');
+                    setError(message);
+                    setTimeout(() => setError(''), 5000);
+                    if (data.request_id) {
+                        setLastRequestId(data.request_id);
+                        setLastRequestParams({ plan: newPlanType, users: userCount, cycle: billingCycle });
+                    }
+                }
+            } catch (e) {
+                setError('Failed to upgrade subscription');
+                setTimeout(() => setError(''), 5000);
+            } finally {
+                setIsUpgrading(false);
+            }
+        }, [isUpgrading, lastRequestId, lastRequestParams, fetchSubscription]);
+
+        const handleCancel = useCallback(async (cancelAtCycleEnd = true, reason = '') => {
+            try {
+                const response = await makeAuthenticatedRequest('/api/org/subscription/cancel', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ cancel_at_cycle_end: cancelAtCycleEnd, reason })
+                });
+                const data = await response.json();
+                if (data.status === 'success') {
+                    setNotifications({ message: data.message, type: 'success' });
+                    fetchSubscription();
+                } else {
+                    setError(data.message || 'Failed to cancel subscription');
+                }
+            } catch (e) {
+                setError('Failed to cancel subscription');
+            }
+        }, [fetchSubscription]);
+
+        const handlePause = useCallback(async (pauseDuration = 1, reason = '') => {
+            try {
+                const response = await makeAuthenticatedRequest('/api/org/subscription/pause', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ pause_duration: pauseDuration, reason })
+                });
+                const data = await response.json();
+                if (data.status === 'success') {
+                    setNotifications({ message: data.message, type: 'success' });
+                    fetchSubscription();
+                } else {
+                    setError(data.message || 'Failed to pause subscription');
+                }
+            } catch (e) {
+                setError('Failed to pause subscription');
+            }
+        }, [fetchSubscription]);
+
+        const downloadInvoice = useCallback(async (transactionId) => {
+            try {
+                const response = await makeAuthenticatedRequest(`/api/org/billing/invoice/${transactionId}`, {
+                    method: 'GET'
+                });
+                if (response.ok) {
+                    const blob = await response.blob();
+                    const url = window.URL.createObjectURL(blob);
+                    const link = document.createElement('a');
+                    link.href = url;
+                    link.download = `invoice_${transactionId}.pdf`;
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                    window.URL.revokeObjectURL(url);
+                } else {
+                    const data = await response.json();
+                    setError(data.message || 'Failed to download invoice');
+                }
+            } catch (e) {
+                setError('Failed to download invoice');
+            }
+        }, []);
+
+        // Fetch activity logs
+        const fetchActivityLogs = useCallback(async () => {
+            setIsLoadingData(true);
+            try {
+                const response = await makeAuthenticatedRequest('/api/activity_log', {
+                    method: 'GET',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                const data = await response.json();
+                setActivityLogs(data || []);
+            } catch (err) {
+                setError(err.message);
+            } finally {
+                setIsLoadingData(false);
+            }
+        }, []);
+
+        // Fetch data on mount and tab change
+        useEffect(() => {
+            if (!loggedInUser) return;
+            fetchPendingAdmins();
+            if (activeTab === 'users') {
+                fetchUsers();
+            } else if (activeTab === 'subscription') {
+                fetchSubscription();
+            } else if (activeTab === 'logs') {
+                fetchActivityLogs();
+            }
+        }, [loggedInUser, activeTab, fetchPendingAdmins, fetchUsers, fetchSubscription, fetchActivityLogs]);
+
+        // Approval handlers
+        const handleApprove = useCallback((email) => {
+            setPendingAdmins(prev => prev.filter(admin => admin.email !== email));
+            fetchPendingAdmins();
+        }, [fetchPendingAdmins]);
+
+        const handleReject = useCallback((email) => {
+            setPendingAdmins(prev => prev.filter(admin => admin.email !== email));
+            fetchPendingAdmins();
+        }, [fetchPendingAdmins]);
+
+        // User management handlers
+        const handleUserCreated = useCallback(() => {
+            fetchUsers();
+            setNotifications({ message: 'User created successfully', type: 'success' });
+        }, [fetchUsers]);
+
+        const handleUserUpdated = useCallback(() => {
+            fetchUsers();
+            setNotifications({ message: 'User updated successfully', type: 'success' });
+        }, [fetchUsers]);
+
+        const handleUserDeleted = useCallback(() => {
+            fetchUsers();
+            setNotifications({ message: 'User deleted successfully', type: 'success' });
+        }, [fetchUsers]);
+
+        // Loading state
+        if (isLoading) {
+            return React.createElement('div', { className: 'flex items-center justify-center min-h-screen' },
+                React.createElement('div', { className: 'animate-spin rounded-full h-12 w-12 border-t-4 border-b-4 border-blue-500' })
+            );
+        }
+
+        // Error state
+        if (error && !loggedInUser) {
+            return React.createElement('div', { className: 'p-6 bg-red-50 border border-red-200 rounded-lg text-red-700' },
+                React.createElement('p', { className: 'font-semibold' }, 'Error:'),
+                React.createElement('p', null, error)
+            );
+        }
+
+        // Render tab content
+        const renderTabContent = () => {
+            if (activeTab === 'users') {
+                // Render UserManagementModal content inline (copied from admin_modals.html lines 74-469)
+                return React.createElement('div', { className: 'space-y-6' },
+                    notifications && React.createElement('div', { className: `p-4 rounded-lg ${notifications.type === 'success' ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}` },
+                        React.createElement('button', { onClick: () => setNotifications(null), className: 'float-right' }, '×'),
+                        notifications.message
+                    ),
+                    React.createElement('div', { className: 'flex justify-between items-center mb-4' },
+                        React.createElement('h2', { className: 'text-xl font-semibold text-gray-900' }, 'User Management'),
+                        React.createElement('div', { className: 'flex items-center space-x-2' },
+                            React.createElement('span', {
+                                className: `text-sm px-2 py-1 rounded ${orgAdminCount < 2 ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}`
+                            }, `Org Admins: ${orgAdminCount}/2`),
+                            canManageUsers(loggedInUser?.role) && React.createElement('button', {
+                                onClick: () => { setShowCreateForm(true); resetForm(); },
+                                className: 'px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors'
+                            }, 'Add User')
+                        )
+                    ),
+                    error && React.createElement('div', {
+                        className: 'mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm'
+                    }, error),
+                    React.createElement('div', { className: 'overflow-x-auto' },
+                        React.createElement('table', { className: 'min-w-full divide-y divide-gray-200' },
+                            React.createElement('thead', { className: 'bg-gray-50' },
+                                React.createElement('tr', null,
+                                    React.createElement('th', { className: 'px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider' }, 'Email'),
+                                    React.createElement('th', { className: 'px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider' }, 'Role'),
+                                    React.createElement('th', { className: 'px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider' }, 'Status'),
+                                    React.createElement('th', { className: 'px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider' }, 'Created'),
+                                    isSuperAdmin(loggedInUser?.role) && React.createElement('th', { className: 'px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider' }, 'Organization'),
+                                    React.createElement('th', { className: 'px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider' }, 'Actions')
+                                )
+                            ),
+                            React.createElement('tbody', { className: 'bg-white divide-y divide-gray-200' },
+                                isLoadingData ?
+                                    // Skeleton Rows
+                                    Array(5).fill(0).map((_, i) =>
+                                        React.createElement('tr', { key: `skeleton-${i}`, className: 'animate-pulse' },
+                                            React.createElement('td', { className: 'px-6 py-4' }, React.createElement('div', { className: 'h-4 bg-slate-200 rounded w-48' })),
+                                            React.createElement('td', { className: 'px-6 py-4' }, React.createElement('div', { className: 'h-6 bg-slate-200 rounded-full w-20' })),
+                                            React.createElement('td', { className: 'px-6 py-4' }, React.createElement('div', { className: 'h-4 bg-slate-200 rounded w-24' })),
+                                            React.createElement('td', { className: 'px-6 py-4' }, React.createElement('div', { className: 'h-4 bg-slate-200 rounded w-32' })),
+                                            isSuperAdmin(loggedInUser?.role) && React.createElement('td', { className: 'px-6 py-4' }, React.createElement('div', { className: 'h-4 bg-slate-200 rounded w-24' })),
+                                            React.createElement('td', { className: 'px-6 py-4' }, React.createElement('div', { className: 'h-4 bg-slate-200 rounded w-16' }))
+                                        )
+                                    )
+                                    : users.map(user => React.createElement('tr', {
+                                        key: user.id,
+                                        className: 'hover:bg-gray-50'
+                                    },
+                                        React.createElement('td', { className: 'px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900' }, user.email),
+                                        React.createElement('td', { className: 'px-6 py-4 whitespace-nowrap text-sm text-gray-500' }, getRoleBadge(user.role)),
+                                        React.createElement('td', { className: 'px-6 py-4 whitespace-nowrap text-sm text-gray-500' }, user.status),
+                                        React.createElement('td', { className: 'px-6 py-4 whitespace-nowrap text-sm text-gray-500' }, new Date(user.created_at).toLocaleDateString()),
+                                        isSuperAdmin(loggedInUser?.role) && React.createElement('td', { className: 'px-6 py-4 whitespace-nowrap text-sm text-gray-500' }, user.org_id),
+                                        React.createElement('td', { className: 'px-6 py-4 whitespace-nowrap text-sm font-medium' },
+                                            React.createElement('div', { className: 'flex items-center space-x-2' },
+                                                canManageUsers(loggedInUser?.role) && user.role !== 'super_admin' && user.id !== loggedInUser?.id && React.createElement('button', {
+                                                    onClick: () => handleChangeRole(user.id, user.role === 'org_admin' ? 'org_user' : 'org_admin'),
+                                                    className: 'text-blue-600 hover:text-blue-900 text-xs'
+                                                }, user.role === 'org_admin' ? 'Demote' : 'Promote'),
+                                                canManageUsers(loggedInUser?.role) && user.role !== 'super_admin' && user.id !== loggedInUser?.id && React.createElement('button', {
+                                                    onClick: () => {
+                                                        if (confirm('Are you sure you want to delete this user?')) {
+                                                            makeAuthenticatedRequest(`/api/org/users/${user.id}`, {
+                                                                method: 'DELETE',
+                                                                headers: { 'Content-Type': 'application/json' }
+                                                            })
+                                                                .then(res => res.json())
+                                                                .then(data => {
+                                                                    if (data.status === 'success') {
+                                                                        handleUserDeleted();
+                                                                    } else {
+                                                                        setError(data.message || 'Failed to delete user');
+                                                                    }
+                                                                })
+                                                                .catch(err => setError(err.message));
+                                                        }
+                                                    },
+                                                    className: 'text-red-600 hover:text-red-900 text-xs'
+                                                }, 'Delete'),
+                                                canManageUsers(loggedInUser?.role) && user.role !== 'super_admin' && user.id !== loggedInUser?.id && React.createElement('button', {
+                                                    onClick: () => {
+                                                        setEditingUser(user);
+                                                        setFormData({ email: user.email, password: '', role: user.role, status: user.status });
+                                                        setShowCreateForm(false);
+                                                    },
+                                                    className: 'text-blue-600 hover:text-blue-900 text-xs'
+                                                }, 'Edit')
+                                            )
+                                        )
+                                    ))
+                            )
+                        )
+                    ),
+                    // Create/Edit Form
+                    (showCreateForm || editingUser) && React.createElement('div', {
+                        className: 'mt-6 p-4 bg-gray-50 rounded-lg'
+                    },
+                        React.createElement('h3', {
+                            className: 'text-lg font-medium text-gray-900 mb-4'
+                        }, editingUser ? 'Edit User' : 'Create New User'),
+                        React.createElement('div', {
+                            className: 'grid grid-cols-1 md:grid-cols-2 gap-4'
+                        },
+                            React.createElement('div', null,
+                                React.createElement('label', {
+                                    className: 'block text-sm font-medium text-gray-700 mb-1'
+                                }, 'Email'),
+                                React.createElement('input', {
+                                    type: 'email',
+                                    value: formData.email,
+                                    onChange: (e) => setFormData({ ...formData, email: e.target.value }),
+                                    className: 'w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500',
+                                    placeholder: 'user@example.com',
+                                    disabled: !!editingUser
+                                })
+                            ),
+                            React.createElement('div', null,
+                                React.createElement('label', {
+                                    className: 'block text-sm font-medium text-gray-700 mb-1'
+                                }, 'Password'),
+                                React.createElement('input', {
+                                    type: 'password',
+                                    value: formData.password,
+                                    onChange: (e) => setFormData({ ...formData, password: e.target.value }),
+                                    className: 'w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500',
+                                    placeholder: editingUser ? 'Leave blank to keep current' : 'Enter password'
+                                })
+                            ),
+                            React.createElement('div', null,
+                                React.createElement('label', {
+                                    className: 'block text-sm font-medium text-gray-700 mb-1'
+                                },
+                                    'Role',
+                                    React.createElement('span', {
+                                        className: 'ml-2 text-xs text-gray-500'
+                                    }, `Org Admins: ${orgAdminCount}/2`)
+                                ),
+                                React.createElement('select', {
+                                    value: formData.role,
+                                    onChange: (e) => setFormData({ ...formData, role: e.target.value }),
+                                    className: 'w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500'
+                                },
+                                    React.createElement('option', { value: 'org_user' }, 'Org User'),
+                                    React.createElement('option', {
+                                        value: 'org_admin',
+                                        disabled: orgAdminCount >= 2 && loggedInUser?.role !== 'super_admin' && (!editingUser || editingUser.role !== 'org_admin')
+                                    }, orgAdminCount >= 2 && loggedInUser?.role !== 'super_admin' && (!editingUser || editingUser.role !== 'org_admin') ? 'Org Admin (Limit Reached)' : 'Org Admin')
+                                ),
+                                (orgAdminCount >= 2 && loggedInUser?.role !== 'super_admin' && (!editingUser || editingUser.role !== 'org_admin')) && React.createElement('div', {
+                                    className: 'mt-1 text-sm text-yellow-600'
+                                }, '⚠️ Maximum 2 org admins allowed. Please change an existing admin\'s role to org_user before adding new admins.')
+                            ),
+                            React.createElement('div', null,
+                                React.createElement('label', {
+                                    className: 'block text-sm font-medium text-gray-700 mb-1'
+                                }, 'Status'),
+                                React.createElement('select', {
+                                    value: formData.status,
+                                    onChange: (e) => setFormData({ ...formData, status: e.target.value }),
+                                    className: 'w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500'
+                                },
+                                    React.createElement('option', { value: 'approved' }, 'Approved'),
+                                    React.createElement('option', { value: 'suspended' }, 'Suspended'),
+                                    React.createElement('option', { value: 'pending' }, 'Pending')
+                                )
+                            )
+                        ),
+                        React.createElement('div', {
+                            className: 'flex items-center justify-end space-x-3 mt-4'
+                        },
+                            React.createElement('button', {
+                                onClick: () => { setShowCreateForm(false); setEditingUser(null); resetForm(); },
+                                className: 'px-4 py-2 text-gray-700 bg-gray-200 rounded-lg hover:bg-gray-300 transition-colors'
+                            }, 'Cancel'),
+                            React.createElement('button', {
+                                onClick: () => editingUser ? handleUpdateUser() : handleCreateUser(),
+                                className: 'px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors'
+                            }, editingUser ? 'Update User' : 'Create User')
+                        )
+                    )
+                );
+            } else if (activeTab === 'approvals') {
+                // Render ApprovalDashboard content inline (copied from admin_modals.html lines 2-72)
+                if (!pendingAdmins || pendingAdmins.length === 0) {
+                    return React.createElement('div', { className: 'text-center py-10 text-slate-500' }, 'No pending admin approvals.');
+                }
+                return React.createElement('div', { className: 'mb-6 p-4 bg-amber-100 border-l-4 border-amber-500 shadow rounded-lg' },
+                    React.createElement('h3', { className: 'text-lg font-semibold text-amber-800 mb-2' }, 'Pending Admin Approvals'),
+                    React.createElement('ul', { className: 'space-y-2' },
+                        pendingAdmins.map(admin => React.createElement('li', {
+                            key: admin.id,
+                            className: 'flex items-center justify-between bg-white p-2 rounded-md shadow-sm'
+                        },
+                            React.createElement('span', { className: 'text-sm text-slate-700' }, admin.email),
+                            React.createElement('div', { className: 'flex items-center gap-2' },
+                                React.createElement('button', {
+                                    onClick: () => {
+                                        if (window.confirm(`Are you sure you want to reject and delete the admin request for ${admin.email}?`)) {
+                                            makeAuthenticatedRequest('/api/reject_admin', {
+                                                method: 'POST',
+                                                headers: { 'Content-Type': 'application/json' },
+                                                body: JSON.stringify({ email: admin.email })
+                                            })
+                                                .then(res => res.json())
+                                                .then(data => {
+                                                    if (data.status === 'success') {
+                                                        handleReject(admin.email);
+                                                        setNotifications({ message: data.message, type: 'info' });
+                                                    } else {
+                                                        setError(data.message || 'Rejection failed');
+                                                    }
+                                                })
+                                                .catch(err => setError(err.message));
+                                        }
+                                    },
+                                    className: 'px-3 py-1 bg-red-500 text-white text-xs font-semibold rounded-md hover:bg-red-600 transition-colors'
+                                }, 'Reject'),
+                                React.createElement('button', {
+                                    onClick: () => {
+                                        makeAuthenticatedRequest('/api/approve_admin', {
+                                            method: 'POST',
+                                            headers: { 'Content-Type': 'application/json' },
+                                            body: JSON.stringify({ email: admin.email })
+                                        })
+                                            .then(res => res.json())
+                                            .then(data => {
+                                                if (data.status === 'success') {
+                                                    handleApprove(admin.email);
+                                                    setNotifications({ message: data.message, type: 'success' });
+                                                } else {
+                                                    setError(data.message || 'Approval failed');
+                                                }
+                                            })
+                                            .catch(err => setError(err.message));
+                                    },
+                                    className: 'px-3 py-1 bg-green-500 text-white text-xs font-semibold rounded-md hover:bg-green-600 transition-colors'
+                                }, 'Approve')
+                            )
+                        ))
+                    )
+                );
+            } else if (activeTab === 'logs') {
+                // Render ActivityLogModal content inline (copied from admin_modals.html lines 471-552)
+                return React.createElement('div', { className: 'space-y-4' },
+                    React.createElement('div', { className: 'flex justify-between items-center mb-4' },
+                        React.createElement('h2', { className: 'text-xl font-semibold text-gray-900' }, 'Admin Activity Log'),
+                        React.createElement('button', {
+                            onClick: async () => {
+                                try {
+                                    const response = await makeAuthenticatedRequest('/api/activity_log/download', {
+                                        method: 'GET',
+                                        headers: { 'Content-Type': 'application/json' }
+                                    });
+                                    const blob = await response.blob();
+                                    const url = window.URL.createObjectURL(blob);
+                                    const link = document.createElement('a');
+                                    link.href = url;
+                                    link.download = 'activity_log.csv';
+                                    document.body.appendChild(link);
+                                    link.click();
+                                    document.body.removeChild(link);
+                                    window.URL.revokeObjectURL(url);
+                                } catch (error) {
+                                    alert('Failed to download activity log: ' + error.message);
+                                }
+                            },
+                            className: 'px-3 py-1 bg-green-600 hover:bg-green-700 text-white text-sm rounded-md'
+                        }, 'Download CSV')
+                    ),
+                    React.createElement('div', { className: 'overflow-x-auto' },
+                        React.createElement('table', { className: 'min-w-full divide-y divide-slate-200' },
+                            React.createElement('thead', { className: 'bg-slate-50 sticky top-0' },
+                                React.createElement('tr', null,
+                                    React.createElement('th', { className: 'px-3 py-2 text-left text-xs font-semibold text-slate-600 uppercase' }, 'Timestamp'),
+                                    React.createElement('th', { className: 'px-3 py-2 text-left text-xs font-semibold text-slate-600 uppercase' }, 'User'),
+                                    React.createElement('th', { className: 'px-3 py-2 text-left text-xs font-semibold text-slate-600 uppercase' }, 'Project'),
+                                    React.createElement('th', { className: 'px-3 py-2 text-left text-xs font-semibold text-slate-600 uppercase' }, 'Action'),
+                                    React.createElement('th', { className: 'px-3 py-2 text-left text-xs font-semibold text-slate-600 uppercase' }, 'Details')
+                                )
+                            ),
+                            React.createElement('tbody', { className: 'bg-white divide-y divide-slate-200' },
+                                isLoadingData ? React.createElement('tr', null,
+                                    React.createElement('td', { colSpan: 5, className: 'px-3 py-2 text-center text-slate-500' }, 'Loading logs...')
+                                ) : activityLogs.map((log, index) => React.createElement('tr', { key: `${log.timestamp}-${index}`, className: 'hover:bg-slate-50' },
+                                    React.createElement('td', { className: 'px-3 py-2 whitespace-nowrap text-xs text-slate-500' }, new Date(log.timestamp).toLocaleString()),
+                                    React.createElement('td', { className: 'px-3 py-2 whitespace-nowrap text-sm text-slate-800' }, log.user),
+                                    React.createElement('td', { className: 'px-3 py-2 whitespace-nowrap text-sm text-slate-600' }, log.project || 'N/A'),
+                                    React.createElement('td', { className: 'px-3 py-2 whitespace-nowrap text-sm text-slate-600' }, log.action),
+                                    React.createElement('td', { className: 'px-3 py-2 text-sm text-slate-600' }, log.details)
+                                ))
+                            )
+                        )
+                    )
+                );
+            } else if (activeTab === 'subscription') {
+                // Render SubscriptionManagementModal content inline (copied from subscription_modals.html)
+                if (isLoadingData) {
+                    return React.createElement('div', { className: 'text-center py-10' },
+                        React.createElement('div', { className: 'animate-spin rounded-full h-12 w-12 border-t-4 border-b-4 border-blue-500 mx-auto' })
+                    );
+                }
+                if (error && !subscription) {
+                    return React.createElement('div', { className: 'text-center py-10' },
+                        React.createElement('div', { className: 'text-red-600 mb-4' },
+                            React.createElement('p', { className: 'font-medium mb-2' }, 'Failed to load subscription'),
+                            React.createElement('p', { className: 'text-sm text-slate-600 mb-4' }, error),
+                            React.createElement('button', {
+                                onClick: () => { setError(''); fetchSubscription(); },
+                                className: 'px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700'
+                            }, 'Retry')
+                        )
+                    );
+                }
+                return React.createElement('div', { className: 'space-y-4' },
+                    React.createElement('div', { className: 'flex gap-2 mb-4' },
+                        ['overview', 'billing', 'upgrade'].map(tab => (
+                            React.createElement('button', {
+                                key: tab,
+                                onClick: () => setSubscriptionTab(tab),
+                                className: `px-4 py-2 rounded-lg text-sm ${subscriptionTab === tab ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`
+                            }, tab.charAt(0).toUpperCase() + tab.slice(1))
+                        ))
+                    ),
+                    subscriptionTab === 'overview' && subscription && React.createElement('div', { className: 'space-y-4 mb-6' },
+                        React.createElement('div', { className: 'p-4 bg-slate-50 rounded-lg border' },
+                            React.createElement('div', { className: 'flex flex-wrap gap-4 items-center justify-between' },
+                                React.createElement('div', null,
+                                    React.createElement('div', { className: 'text-sm text-slate-500' }, 'Current Plan'),
+                                    React.createElement('div', { className: 'text-lg font-semibold' }, subscription.plan_display_name || subscription.plan_type)
+                                ),
+                                React.createElement('div', null,
+                                    React.createElement('div', { className: 'text-sm text-slate-500' }, 'Status'),
+                                    React.createElement('div', { className: 'text-sm font-medium' }, subscription.status)
+                                ),
+                                React.createElement('div', null,
+                                    React.createElement('div', { className: 'text-sm text-slate-500' }, 'Next Billing'),
+                                    React.createElement('div', { className: 'text-sm font-medium' }, subscription.next_billing_date || '—')
+                                )
+                            )
+                        ),
+                        React.createElement('div', { className: 'flex gap-2' },
+                            subscription.can_upgrade && React.createElement('button', {
+                                onClick: () => setSubscriptionTab('upgrade'),
+                                className: 'px-4 py-2 bg-gradient-to-r from-indigo-500 to-purple-600 text-white rounded-lg'
+                            }, 'Upgrade Plan'),
+                            subscription.can_pause && React.createElement('button', {
+                                onClick: () => handlePause(1, ''),
+                                className: 'px-4 py-2 bg-yellow-500 text-white rounded-lg'
+                            }, 'Pause'),
+                            subscription.can_cancel && React.createElement('button', {
+                                onClick: () => handleCancel(true, ''),
+                                className: 'px-4 py-2 bg-red-600 text-white rounded-lg'
+                            }, 'Cancel')
+                        )
+                    ),
+                    subscriptionTab === 'billing' && React.createElement('div', null,
+                        subscription && React.createElement('div', { className: 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-4' },
+                            React.createElement('div', { className: 'p-3 bg-slate-50 rounded border' },
+                                React.createElement('div', { className: 'text-xs text-slate-500' }, 'Total Paid'),
+                                React.createElement('div', { className: 'text-lg font-semibold', id: 'bh-total-paid' }, '₹0')
+                            ),
+                            React.createElement('div', { className: 'p-3 bg-slate-50 rounded border' },
+                                React.createElement('div', { className: 'text-xs text-slate-500' }, 'Total Transactions'),
+                                React.createElement('div', { className: 'text-lg font-semibold' }, billingPagination.total_count || 0)
+                            ),
+                            React.createElement('div', { className: 'p-3 bg-slate-50 rounded border' },
+                                React.createElement('div', { className: 'text-xs text-slate-500' }, 'Last Payment'),
+                                React.createElement('div', { className: 'text-lg font-semibold', id: 'bh-last-payment' }, '—')
+                            ),
+                            React.createElement('div', { className: 'p-3 bg-slate-50 rounded border' },
+                                React.createElement('div', { className: 'text-xs text-slate-500' }, 'Failed Payments'),
+                                React.createElement('div', { className: 'text-lg font-semibold', id: 'bh-failed' }, '0')
+                            )
+                        ),
+                        React.createElement('div', { className: 'flex flex-wrap gap-2 mb-3' },
+                            React.createElement('select', {
+                                id: 'bh-status',
+                                className: 'p-2 bg-white border rounded',
+                                defaultValue: 'all'
+                            }, ['all', 'success', 'failed', 'pending'].map(s => React.createElement('option', { key: s, value: s === 'all' ? '' : s }, s.charAt(0).toUpperCase() + s.slice(1)))),
+                            React.createElement('input', { id: 'bh-start', type: 'date', className: 'p-2 bg-white border rounded' }),
+                            React.createElement('input', { id: 'bh-end', type: 'date', className: 'p-2 bg-white border rounded' }),
+                            React.createElement('button', {
+                                onClick: () => {
+                                    const status = document.getElementById('bh-status').value;
+                                    const start = document.getElementById('bh-start').value;
+                                    const end = document.getElementById('bh-end').value;
+                                    const filters = {};
+                                    if (status) filters.status = status;
+                                    if (start) filters.start_date = start;
+                                    if (end) filters.end_date = end;
+                                    fetchBillingHistory(1, filters);
+                                },
+                                className: 'px-3 py-2 bg-slate-900 text-white rounded'
+                            }, 'Apply')
+                        ),
+                        React.createElement('div', { className: 'overflow-x-auto' },
+                            React.createElement('table', { className: 'min-w-full text-sm' },
+                                React.createElement('thead', null,
+                                    React.createElement('tr', { className: 'text-left text-slate-600' },
+                                        ['Date', 'Transaction ID', 'Amount', 'Status', 'Invoice'].map(h => React.createElement('th', { key: h, className: 'py-2 px-3 border-b' }, h))
+                                    )
+                                ),
+                                React.createElement('tbody', null,
+                                    billingHistory.length === 0 ? React.createElement('tr', null,
+                                        React.createElement('td', { colSpan: 5, className: 'py-4 px-3 text-center text-slate-500' }, 'No transactions found')
+                                    ) : billingHistory.map(tx => (
+                                        React.createElement('tr', { key: tx.id, className: 'hover:bg-slate-50' },
+                                            React.createElement('td', { className: 'py-2 px-3 border-b' }, tx.created_at || ''),
+                                            React.createElement('td', { className: 'py-2 px-3 border-b' }, tx.razorpay_payment_id || ''),
+                                            React.createElement('td', { className: 'py-2 px-3 border-b' }, `₹${tx.amount}`),
+                                            React.createElement('td', { className: 'py-2 px-3 border-b' }, tx.status),
+                                            React.createElement('td', { className: 'py-2 px-3 border-b' },
+                                                tx.invoice_available ? React.createElement('button', {
+                                                    onClick: () => downloadInvoice(tx.id),
+                                                    className: 'text-indigo-600 hover:underline'
+                                                }, 'Download') : '—'
+                                            )
+                                        )
+                                    ))
+                                )
+                            )
+                        ),
+                        React.createElement('div', { className: 'flex items-center justify-between mt-3' },
+                            React.createElement('button', {
+                                disabled: !(billingPagination.page > 1),
+                                onClick: () => fetchBillingHistory(billingPagination.page - 1),
+                                className: 'px-3 py-1 rounded bg-slate-100 disabled:opacity-50'
+                            }, 'Previous'),
+                            React.createElement('div', { className: 'text-sm text-slate-600' }, `Page ${billingPagination.page || 1} of ${billingPagination.total_pages || 1}`),
+                            React.createElement('button', {
+                                disabled: !(billingPagination.page < (billingPagination.total_pages || 1)),
+                                onClick: () => fetchBillingHistory(billingPagination.page + 1),
+                                className: 'px-3 py-1 rounded bg-slate-100 disabled:opacity-50'
+                            }, 'Next')
+                        )
+                    ),
+                    subscriptionTab === 'upgrade' && (() => {
+                        const planBasePrices = { 'basic': 1700, 'si_plus': 2600, 'pro': 4300 };
+                        const planIncludedUsers = { 'basic': 5, 'si_plus': 10, 'pro': 100 };
+                        const extraUserPrice = 500;
+                        const amountPreview = (plan, users, cycle) => {
+                            const basePrice = planBasePrices[plan] || 0;
+                            const includedUsers = planIncludedUsers[plan] || 0;
+                            const userCount = Math.max(1, parseInt(users || 1, 10));
+                            const extraUsers = Math.max(0, userCount - includedUsers);
+                            const extraCost = extraUsers * extraUserPrice;
+                            const monthlyTotal = basePrice + extraCost;
+                            const mult = cycle === 'yearly' ? 12 : 1;
+                            return monthlyTotal * mult;
+                        };
+                        return React.createElement('div', { className: 'space-y-4' },
+                            React.createElement('div', { className: 'grid grid-cols-1 sm:grid-cols-3 gap-3' },
+                                ['basic', 'si_plus', 'pro'].map(p => {
+                                    const basePrice = planBasePrices[p];
+                                    const includedUsers = planIncludedUsers[p];
+                                    const planName = p === 'si_plus' ? 'SI+' : p.toUpperCase();
+                                    return React.createElement('div', {
+                                        key: p,
+                                        className: `p-4 rounded-lg border ${selPlan === p ? 'border-indigo-500' : 'border-slate-200'} cursor-pointer`,
+                                        onClick: () => setSelPlan(p)
+                                    },
+                                        React.createElement('div', { className: 'text-sm text-slate-500 mb-1' }, planName),
+                                        React.createElement('div', { className: 'text-xl font-semibold text-slate-800' }, `₹${basePrice.toLocaleString('en-IN')}/mo`),
+                                        React.createElement('div', { className: 'text-xs text-slate-600 mt-1' }, `Includes ${includedUsers} users`),
+                                        React.createElement('div', { className: 'text-xs text-slate-500 mt-1' }, `₹${extraUserPrice}/user extra`)
+                                    );
+                                })
+                            ),
+                            React.createElement('div', { className: 'flex flex-wrap gap-3' },
+                                React.createElement('div', null,
+                                    React.createElement('div', { className: 'text-xs text-slate-500 mb-1' }, 'Users'),
+                                    React.createElement('input', {
+                                        type: 'number',
+                                        min: 1,
+                                        value: selUsers,
+                                        onChange: e => setSelUsers(e.target.value),
+                                        className: 'p-2 border rounded w-24'
+                                    })
+                                ),
+                                React.createElement('div', null,
+                                    React.createElement('div', { className: 'text-xs text-slate-500 mb-1' }, 'Billing Cycle'),
+                                    React.createElement('select', {
+                                        value: selCycle,
+                                        onChange: e => setSelCycle(e.target.value),
+                                        className: 'p-2 border rounded'
+                                    },
+                                        React.createElement('option', { value: 'monthly' }, 'Monthly'),
+                                        React.createElement('option', { value: 'yearly' }, 'Yearly')
+                                    )
+                                ),
+                                React.createElement('div', { className: 'ml-auto p-2 rounded bg-slate-50 border' },
+                                    React.createElement('div', { className: 'text-xs text-slate-500 mb-1' }, 'Total Amount'),
+                                    React.createElement('div', { className: 'text-lg font-semibold text-slate-800' },
+                                        `₹${amountPreview(selPlan, selUsers, selCycle).toLocaleString('en-IN')}${selCycle === 'yearly' ? '/year' : '/month'}`
+                                    )
+                                )
+                            ),
+                            React.createElement('div', null,
+                                React.createElement('button', {
+                                    onClick: () => handleUpgrade(selPlan, parseInt(selUsers || 1, 10), selCycle),
+                                    disabled: isUpgrading,
+                                    className: 'px-4 py-2 bg-gradient-to-r from-indigo-500 to-purple-600 text-white rounded-lg disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2'
+                                }, isUpgrading ? React.createElement('span', { className: 'flex items-center gap-2' },
+                                    React.createElement('span', { className: 'w-4 h-4 border-2 border-white/70 border-t-transparent rounded-full animate-spin' }),
+                                    'Processing...'
+                                ) : 'Confirm Upgrade')
+                            )
+                        );
+                    })()
+                );
+            } else if (activeTab === 'settings') {
+                // Organization Settings Tab
+                return React.createElement('div', { className: 'space-y-4' },
+                    React.createElement('h2', { className: 'text-xl font-semibold text-gray-900' }, 'Organization Settings'),
+                    React.createElement('div', { className: 'bg-white rounded-lg shadow p-6 space-y-4' },
+                        React.createElement('div', null,
+                            React.createElement('label', { className: 'block text-sm font-medium text-gray-700 mb-1' }, 'Organization Name'),
+                            React.createElement('div', { className: 'text-sm text-gray-500' }, loggedInUser?.org_id || 'N/A')
+                        ),
+                        React.createElement('div', null,
+                            React.createElement('label', { className: 'block text-sm font-medium text-gray-700 mb-1' }, 'Organization ID'),
+                            React.createElement('div', { className: 'text-sm text-gray-500' }, loggedInUser?.org_id || 'N/A')
+                        ),
+                        loggedInUser?.role === 'super_admin' && React.createElement('div', null,
+                            React.createElement('label', { className: 'block text-sm font-medium text-gray-700 mb-1' }, 'Database Path'),
+                            React.createElement('div', { className: 'text-sm text-gray-500' }, 'primary.db')
+                        ),
+                        React.createElement('div', null,
+                            React.createElement('button', {
+                                onClick: async () => {
+                                    try {
+                                        await makeAuthenticatedRequest('/api/org/tour-seen', {
+                                            method: 'POST',
+                                            headers: { 'Content-Type': 'application/json' },
+                                            body: JSON.stringify({ tour_seen: false })
+                                        });
+                                        setNotifications({ message: 'Tour reset successfully', type: 'success' });
+                                    } catch (err) {
+                                        setError(err.message);
+                                    }
+                                },
+                                className: 'px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors'
+                            }, 'Reset Onboarding Tour')
+                        )
+                    )
+                );
+            }
+            return null;
+        };
+
+        return React.createElement('div', { className: 'admin-tab-content p-6' },
+            error && React.createElement('div', { className: 'mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm' },
+                React.createElement('button', { onClick: () => setError(null), className: 'float-right' }, '×'),
+                error
+            ),
+            notifications && React.createElement('div', { className: `mb-4 p-3 rounded-lg ${notifications.type === 'success' ? 'bg-green-50 text-green-700' : 'bg-blue-50 text-blue-700'}` },
+                React.createElement('button', { onClick: () => setNotifications(null), className: 'float-right' }, '×'),
+                notifications.message
+            ),
+            activeTab === 'approvals' && pendingAdmins.length > 0 && React.createElement('div', { className: 'mb-6' },
+                React.createElement(React.Fragment, null, renderTabContent())
+            ),
+            activeTab !== 'approvals' && renderTabContent()
+        );
+    };
+</script>

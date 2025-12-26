@@ -1,0 +1,423 @@
+<script type="text/babel">
+    const ClientCommunicationModal = ({ task, loggedInUser, onClose, onAdminAddComment, onClientRespond, selectedProject }) => {
+        const { useState, useEffect, useRef, useMemo } = React;
+        const [adminCommentText, setAdminCommentText] = useState("");
+        const [communicationType, setCommunicationType] = useState("");
+        const [attachments, setAttachments] = useState([]);
+        const [isUploading, setIsUploading] = useState(false);
+        const [selectedCommentForReply, setSelectedCommentForReply] = useState(null);
+        const [selectedStatus, setSelectedStatus] = useState("");
+        const [clientCommentText, setClientCommentText] = useState('');
+        const [clientAttachments, setClientAttachments] = useState([]);
+        const modalContentRef = useRef(null);
+        const loggedInUserType = loggedInUser.userType;
+
+        const pendingComments = useMemo(() => {
+            if (!task.clientComments) return [];
+            return task.clientComments.filter(c => !c.clientStatus);
+        }, [task.clientComments]);
+
+        useEffect(() => {
+            const handleClickOutside = (event) => {
+                if (modalContentRef.current && !modalContentRef.current.contains(event.target)) { onClose(); }
+            };
+            document.addEventListener("mousedown", handleClickOutside);
+            return () => { document.removeEventListener("mousedown", handleClickOutside); };
+        }, [onClose]);
+
+        const handleFileDownload = async (projectName, taskId, filename) => {
+            try {
+                // Download document endpoint uses path parameters
+                // Each segment should be URL-encoded to handle special characters
+                // Example: project name "Test & Demo" becomes "Test%20%26%20Demo"
+                const response = await makeAuthenticatedRequest(`/download_document/${encodeURIComponent(projectName)}/${encodeURIComponent(taskId)}/${encodeURIComponent(filename)}`, { method: 'GET' });
+                if (!response.ok) {
+                    if (response.status === 403) { alert("Access denied. You don't have permission to download this file."); return; }
+                    if (response.status === 404) { alert('File not found.'); return; }
+                    if (response.status === 401) { alert('Authentication required.'); return; }
+                    const txt = await response.text();
+                    throw new Error(txt || 'Download failed');
+                }
+                const blob = await response.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                window.URL.revokeObjectURL(url);
+            } catch (err) {
+                alert(`Download error: ${err.message}`);
+            }
+        };
+
+        const handleFileChange = (e, uploader) => {
+            const files = Array.from(e.target.files);
+            if (files.length > 5) {
+                alert("You can upload a maximum of 5 documents at a time.");
+                e.target.value = null;
+                if (uploader === 'admin') {
+                    setAttachments([]);
+                } else {
+                    setClientAttachments([]);
+                }
+                return;
+            }
+            if (uploader === 'admin') {
+                setAttachments(files);
+            } else {
+                setClientAttachments(files);
+            }
+        };
+
+        const handleAdminSubmit = async () => {
+            if (!adminCommentText.trim() || !communicationType) {
+                alert("Please provide a comment and select a communication type.");
+                return;
+            }
+            // Proactive per-project file limit check
+            const usage = window.latestUsageStats;
+            if (usage && usage.limits && usage.files_by_project && selectedProject) {
+                const current = usage.files_by_project[selectedProject] || 0;
+                const limit = usage.limits.files_per_project ?? 999999;
+                const pending = (attachments || []).length;
+                if (limit < 999999 && current + pending > limit) {
+                    alert(`Uploading ${pending} files would exceed the per-project limit (${current}/${limit}).`);
+                    if (typeof window.refreshUsageStats === 'function') window.refreshUsageStats();
+                    return;
+                }
+            }
+            setIsUploading(true);
+            let uploadedFilePaths = [];
+            if (attachments.length > 0) {
+                const formData = new FormData();
+                attachments.forEach(file => {
+                    formData.append('files[]', file);
+                });
+                formData.append('project_name', selectedProject);
+                formData.append('task_id', String(task.id));
+                try {
+                    const response = await makeAuthenticatedRequest('/api/upload_document', { method: 'POST', body: formData });
+                    const result = await response.json();
+                    if (result.status === 'success') {
+                        uploadedFilePaths = result.filepaths;
+                    } else { throw new Error(result.message || 'File upload failed'); }
+                } catch (error) {
+                    alert(`Error uploading files: ${error.message}`);
+                    setIsUploading(false);
+                    return;
+                }
+            }
+            onAdminAddComment(task.id, adminCommentText.trim(), communicationType, uploadedFilePaths);
+            setIsUploading(false);
+            onClose();
+        };
+
+        const handleSendResponse = async () => {
+            if (selectedCommentForReply && selectedStatus) {
+                // Proactive per-project file limit check for client reply
+                const usage = window.latestUsageStats;
+                if (usage && usage.limits && usage.files_by_project && selectedProject) {
+                    const current = usage.files_by_project[selectedProject] || 0;
+                    const limit = usage.limits.files_per_project ?? 999999;
+                    const pending = (clientAttachments || []).length;
+                    if (limit < 999999 && current + pending > limit) {
+                        alert(`Uploading ${pending} files would exceed the per-project limit (${current}/${limit}).`);
+                        if (typeof window.refreshUsageStats === 'function') window.refreshUsageStats();
+                        return;
+                    }
+                }
+                setIsUploading(true);
+                let clientUploadedFilePaths = [];
+                if (clientAttachments.length > 0) {
+                    const formData = new FormData();
+                    clientAttachments.forEach(file => {
+                        formData.append('files[]', file);
+                    });
+                    formData.append('project_name', selectedProject);
+                    formData.append('task_id', String(task.id));
+                     try {
+                        const response = await makeAuthenticatedRequest('/api/upload_document', { method: 'POST', body: formData });
+                        const result = await response.json();
+                        if (result.status === 'success') {
+                            clientUploadedFilePaths = result.filepaths;
+                        } else { throw new Error(result.message || 'File upload failed'); }
+                    } catch (error) {
+                        alert(`Error uploading files: ${error.message}`);
+                        setIsUploading(false);
+                        return;
+                    }
+                }
+                onClientRespond(task.id, selectedCommentForReply.id, selectedStatus, clientCommentText, clientUploadedFilePaths);
+                setIsUploading(false);
+                onClose();
+            }
+        };
+
+        const handleSelectCommentForReply = (comment) => {
+            setSelectedCommentForReply(comment);
+            setSelectedStatus('');
+            setClientCommentText('');
+            setClientAttachments([]);
+        };
+
+        const isClientButtonDisabled = !selectedStatus || (selectedStatus === 'Return with Comments' && !clientCommentText.trim()) || isUploading;
+        const isAdminButtonDisabled = !adminCommentText.trim() || !communicationType || isUploading;
+
+        const communicationLog = (
+            React.createElement("div", { className: "flex-shrink-0" },
+                React.createElement("h3", { className: "font-medium text-slate-800 mb-2 text-sm" }, "Communication Log"),
+                task.clientComments && task.clientComments.length > 0 ? (
+                    React.createElement("ul", { className: "list-none space-y-3 max-h-40 overflow-y-auto pr-2 border rounded-md p-2 bg-slate-50" },
+                        task.clientComments
+                            .slice()
+                            .sort((a, b) => new Date(b.adminTimestamp) - new Date(a.adminTimestamp))
+                            .map((cc) => (
+                                React.createElement("li", { key: cc.id, className: "p-2.5 rounded-md border text-xs " + (cc.clientStatus ? "bg-white border-green-200" : "bg-white border-sky-200") },
+                                    React.createElement("div", { className: "flex justify-between items-center" },
+                                        React.createElement("span", { className: "block font-medium text-slate-700" }, `Admin (${new Date(cc.adminTimestamp).toLocaleString()})`),
+                                        cc.communicationType && React.createElement("span", { className: `px-2 py-0.5 text-xs rounded-full ${cc.communicationType === 'Approval' ? 'bg-orange-100 text-orange-800' : cc.communicationType === 'Review' ? 'bg-purple-100 text-purple-800' : 'bg-blue-100 text-blue-800'}` }, cc.communicationType)
+                                    ),
+                                    React.createElement("p", { className: "text-slate-600 mt-1 whitespace-pre-wrap" }, cc.adminComment),
+                                    cc.attachments && cc.attachments.length > 0 &&
+                                    React.createElement("div", {className: "mt-2"},
+                                        React.createElement("p", {className: "text-xs font-medium text-slate-600 mb-1"}, "Admin Uploads:"),
+                                        React.createElement("div", {className: "flex flex-col items-start gap-1.5"},
+                                            cc.attachments.map((attachment, index) =>
+                                                React.createElement("a", {
+                                                    key: index,
+                                                    href: '#',
+                                                    onClick: (e) => { e.preventDefault(); handleFileDownload(selectedProject, task.id, attachment); },
+                                                    className: "inline-flex items-center text-xs text-blue-600 hover:text-blue-800 bg-blue-100 px-2 py-1 rounded",
+                                                    style: { cursor: 'pointer' }
+                                                }, React.createElement(PaperclipIcon, { size: 14, className: "mr-1.5" }), `Download Attachment ${index + 1}`)
+                                            )
+                                        )
+                                    ),
+                                    cc.clientStatus && (React.createElement(React.Fragment, null,
+                                        React.createElement("hr", { className: "my-2 border-slate-300" }),
+                                        React.createElement("span", { className: "block font-medium text-slate-700" }, `Client (${new Date(cc.clientResponseTimestamp).toLocaleString()}):`),
+                                        React.createElement("p", { className: "text-slate-600 mt-0.5 whitespace-pre-wrap" }, React.createElement("strong", null, cc.clientStatus)),
+                                        cc.clientComment && React.createElement("p", { className: "text-slate-500 mt-1 pl-2 border-l-2 border-slate-300" }, cc.clientComment),
+                                        cc.clientAttachments && cc.clientAttachments.length > 0 &&
+                                        React.createElement("div", {className: "mt-2"},
+                                            React.createElement("p", {className: "text-xs font-medium text-slate-600 mb-1"}, "Client Uploads:"),
+                                            React.createElement("div", {className: "flex flex-col items-start gap-1.5"},
+                                                 cc.clientAttachments.map((attachment, index) =>
+                                                    React.createElement("a", {
+                                                        key: index,
+                                                        href: '#',
+                                                        onClick: (e) => { e.preventDefault(); handleFileDownload(selectedProject, task.id, attachment); },
+                                                        className: "inline-flex items-center text-xs text-green-600 hover:text-green-800 bg-green-100 px-2 py-1 rounded",
+                                                        style: { cursor: 'pointer' }
+                                                    }, React.createElement(PaperclipIcon, { size: 14, className: "mr-1.5" }), `Download Attachment ${index + 1}`)
+                                                )
+                                            )
+                                        )
+                                    ))
+                                )
+                            ))
+                    )
+                ) : (React.createElement("p", { className: "text-sm italic text-slate-500" }, "No comments yet."))
+            )
+        );
+
+        return (
+            React.createElement("div", { className: "fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50 backdrop-blur-sm" },
+                React.createElement("div", { ref: modalContentRef, className: "modal-content p-6 rounded-xl shadow-xl w-full max-w-lg max-h-[90vh] flex flex-col" },
+                    React.createElement("h2", { className: "text-xl font-semibold mb-4 text-sky-600 flex items-center flex-shrink-0" }, React.createElement(MessageSquareIcon, { size: 20, className: "mr-2" }), `Communication for "${task.taskName}"`),
+                    React.createElement("div", { className: "flex-grow flex flex-col gap-4 min-h-0" },
+                        loggedInUserType !== "client" && React.createElement(React.Fragment, null,
+                            communicationLog,
+                            React.createElement("div", { className: "flex-grow flex flex-col gap-3 min-h-0 border-t pt-4" },
+                                React.createElement("label", { htmlFor: "adminComment", className: "modal-label block text-sm font-medium" }, "New Comment to Client"),
+                                React.createElement("textarea", { id: "adminComment", className: "w-full p-2 modal-input rounded-md flex-grow", value: adminCommentText, onChange: (e) => setAdminCommentText(e.target.value), placeholder: "Type your comment here..." }),
+                                React.createElement("div", null,
+                                    React.createElement("label", { className: "modal-label block text-sm font-medium mb-2" }, "Communication Type (Required)"),
+                                    React.createElement("div", { className: "flex flex-wrap gap-3" }, ["Information", "Review", "Approval"].map(type => React.createElement("label", { key: type, className: "flex items-center text-sm" }, React.createElement("input", { type: "radio", name: "commType", value: type, checked: communicationType === type, onChange: (e) => setCommunicationType(e.target.value), className: "h-4 w-4" }), React.createElement("span", { className: "ml-2" }, type))))
+                                ),
+                                React.createElement("div", null,
+                                    React.createElement("label", { htmlFor: "attachment", className: "modal-label block text-sm font-medium" }, "Attach Documents (Up to 5)"),
+                                    React.createElement("input", { type: "file", id: "attachment", onChange: (e) => handleFileChange(e, 'admin'), multiple: true, className: "w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-sky-50 file:text-sky-700 hover:file:bg-sky-100" }),
+                                    attachments.length > 0 && React.createElement("div", {className: "mt-2 text-xs text-slate-500"},
+                                        React.createElement("p", {className:"font-medium"}, "Selected files:"),
+                                        React.createElement("ul", {className: "list-disc pl-5"},
+                                            attachments.map((file, index) => React.createElement("li", {key: index}, file.name))
+                                        )
+                                    )
+                                )
+                            )
+                        ),
+
+                        loggedInUserType === "client" && React.createElement(React.Fragment, null,
+                            communicationLog,
+                            pendingComments.length > 0 ? React.createElement("div", { className: "flex-grow flex flex-col gap-3 min-h-0 border-t pt-4" },
+                                React.createElement("h3", { className: "font-medium text-slate-800 text-sm" }, "Pending Comments (", pendingComments.length, ") - Select one to reply"),
+                                React.createElement("div", { className: "space-y-2 overflow-y-auto pr-2" },
+                                    pendingComments.map(comment => React.createElement("div", {
+                                        key: comment.id,
+                                        onClick: () => handleSelectCommentForReply(comment),
+                                        className: `p-2.5 rounded-md text-sm cursor-pointer border-2 ${selectedCommentForReply?.id === comment.id ? 'border-blue-500 bg-blue-50' : 'border-slate-200 bg-slate-50 hover:bg-slate-100'}`
+                                    },
+                                        React.createElement("strong", null, `Admin (${new Date(comment.adminTimestamp).toLocaleString()}):`),
+                                        React.createElement("p", { className: "mt-1 whitespace-pre-wrap text-slate-700" }, comment.adminComment)
+                                    ))
+                                ),
+                                selectedCommentForReply && React.createElement("div", { className: "pt-3 border-t space-y-3 flex-shrink-0" },
+                                    React.createElement("div", null,
+                                        React.createElement("label", { htmlFor: "clientStatus", className: "modal-label block text-sm font-medium mb-1" }, "Your Response"),
+                                        React.createElement("select", { id: "clientStatus", className: "w-full p-2 modal-input rounded-md", value: selectedStatus, onChange: (e) => setSelectedStatus(e.target.value) }, React.createElement("option", { value: "" }, "Select a response status..."), CLIENT_COMMENT_STATUSES.map((st) => (React.createElement("option", { key: st, value: st }, st))))
+                                    ),
+                                    selectedStatus === 'Return with Comments' && React.createElement("div", null,
+                                        React.createElement("label", { htmlFor: "clientCommentText", className: "modal-label block text-sm font-medium mb-1" }, "Add Comments"),
+                                        React.createElement("textarea", { id: "clientCommentText", rows: "3", className: "w-full p-2 modal-input rounded-md", value: clientCommentText, onChange: (e) => setClientCommentText(e.target.value) })
+                                    ),
+                                     React.createElement("div", null,
+                                        React.createElement("label", { htmlFor: "clientAttachment", className: "modal-label block text-sm font-medium" }, "Attach Documents (Up to 5)"),
+                                        React.createElement("input", { type: "file", id: "clientAttachment", onChange: (e) => handleFileChange(e, 'client'), multiple: true, className: "w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-green-50 file:text-green-700 hover:file:bg-green-100" }),
+                                         clientAttachments.length > 0 && React.createElement("div", {className: "mt-2 text-xs text-slate-500"},
+                                            React.createElement("p", {className:"font-medium"}, "Selected files:"),
+                                            React.createElement("ul", {className: "list-disc pl-5"},
+                                                clientAttachments.map((file, index) => React.createElement("li", {key: index}, file.name))
+                                            )
+                                        )
+                                    )
+                                )
+                            ) : React.createElement("p", { className: "text-center text-slate-500 italic pt-4" }, "No pending comments from the admin.")
+                        )
+                    ),
+
+                    React.createElement("div", { className: "flex justify-end gap-3 pt-4 flex-shrink-0 border-t" },
+                        React.createElement("button", { type: "button", onClick: onClose, className: "px-4 py-2 bg-slate-200 hover:bg-slate-300 rounded-md text-slate-700" }, "Cancel"),
+                        loggedInUserType !== 'client' && React.createElement("button", { type: "button", onClick: handleAdminSubmit, disabled: isAdminButtonDisabled, className: "px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-md text-white font-semibold flex items-center disabled:bg-blue-300 disabled:cursor-not-allowed" }, isUploading ? React.createElement(React.Fragment, null, React.createElement("div", { className: "animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2" }), "Submitting...") : React.createElement(React.Fragment, null, React.createElement(SendIcon, { size: 16, className: "mr-2" }), "Submit to Client")),
+                        loggedInUserType === 'client' && selectedCommentForReply && React.createElement("button", { type: "button", onClick: handleSendResponse, className: "px-4 py-2 bg-green-600 hover:bg-green-700 rounded-md text-white font-semibold flex items-center disabled:bg-green-300", disabled: isClientButtonDisabled }, isUploading ? React.createElement(React.Fragment, null, React.createElement("div", { className: "animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2" }), "Sending...") :React.createElement(React.Fragment, null, React.createElement(SendIcon, { size: 16, className: "mr-2" }), "Send Response"))
+                    )
+                )
+            )
+        );
+    };
+
+    const AddTaskModal = ({ onClose, onAdd, mode }) => {
+        const { useState, useRef, useEffect } = React;
+        const [taskName, setTaskName] = useState('');
+        const [plannedStartDate, setPlannedStartDate] = useState('');
+        const [plannedEndDate, setPlannedEndDate] = useState('');
+        const modalContentRef = useRef(null);
+        useEffect(() => {
+            const handleClickOutside = (event) => {
+                if (modalContentRef.current && !modalContentRef.current.contains(event.target)) {
+                    onClose();
+                }
+            };
+            document.addEventListener("mousedown", handleClickOutside);
+            return () => document.removeEventListener("mousedown", handleClickOutside);
+        }, [onClose]);
+        const handleSubmit = (e) => {
+            e.preventDefault();
+            if (!taskName.trim()) {
+                alert("Task Name is required.");
+                return;
+            }
+            onAdd({ taskName, plannedStartDate, plannedEndDate });
+            onClose();
+        };
+        return React.createElement("div", { className: "fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center p-4 z-50" },
+            React.createElement("div", { ref: modalContentRef, className: "modal-content p-6 rounded-xl shadow-2xl w-full max-w-md" },
+                React.createElement("h2", { className: "text-xl font-semibold mb-4 text-blue-600" }, mode === 'child' ? "Add New Sub-task" : "Add New Task"),
+                React.createElement("form", { onSubmit: handleSubmit, className: "space-y-4" },
+                    React.createElement("div", null,
+                        React.createElement("label", { htmlFor: "taskName", className: "modal-label block text-sm font-medium mb-1" }, "Task Name"),
+                        React.createElement("input", { type: "text", id: "taskName", value: taskName, onChange: e => setTaskName(e.target.value), required: true, className: "w-full p-2 modal-input rounded-md" })
+                    ),
+                    React.createElement("div", null,
+                        React.createElement("label", { htmlFor: "plannedStartDate", className: "modal-label block text-sm font-medium mb-1" }, "Planned Start Date"),
+                        React.createElement("input", { type: "date", id: "plannedStartDate", value: plannedStartDate, onChange: e => setPlannedStartDate(e.target.value), className: "w-full p-2 modal-input rounded-md" })
+                    ),
+                    React.createElement("div", null,
+                        React.createElement("label", { htmlFor: "plannedEndDate", className: "modal-label block text-sm font-medium mb-1" }, "Planned End Date"),
+                        React.createElement("input", { type: "date", id: "plannedEndDate", value: plannedEndDate, onChange: e => setPlannedEndDate(e.target.value), className: "w-full p-2 modal-input rounded-md" })
+                    ),
+                    React.createElement("div", { className: "flex justify-end space-x-3 pt-4" },
+                        React.createElement("button", { type: "button", onClick: onClose, className: "px-4 py-2 rounded-md bg-slate-200 hover:bg-slate-300 text-slate-700" }, "Cancel"),
+                        React.createElement("button", { type: "submit", className: "px-4 py-2 rounded-md bg-blue-600 hover:bg-blue-700 text-white font-semibold" }, "Add Task")
+                    )
+                )
+            )
+        );
+    };
+
+    const AddProjectModal = ({ onClose, onAdd }) => {
+        const { useState, useRef, useEffect } = React;
+        const [projectName, setProjectName] = useState('');
+        const [clientAccessCode, setClientAccessCode] = useState('');
+        const modalContentRef = useRef(null);
+        
+        useEffect(() => {
+            const handleClickOutside = (event) => {
+                if (modalContentRef.current && !modalContentRef.current.contains(event.target)) {
+                    onClose();
+                }
+            };
+            document.addEventListener("mousedown", handleClickOutside);
+            return () => document.removeEventListener("mousedown", handleClickOutside);
+        }, [onClose]);
+        
+        const handleSubmit = (e) => {
+            e.preventDefault();
+            if (!projectName.trim()) {
+                alert("Project Name is required.");
+                return;
+            }
+            if (!clientAccessCode.trim()) {
+                alert("Client Access Code is required.");
+                return;
+            }
+            onAdd(projectName, clientAccessCode);
+            onClose();
+        };
+        
+        return React.createElement("div", { className: "fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center p-4 z-50" },
+            React.createElement("div", { ref: modalContentRef, className: "modal-content p-6 rounded-xl shadow-2xl w-full max-w-md" },
+                React.createElement("h2", { className: "text-xl font-semibold mb-4 text-green-600" }, "Add New Project"),
+                React.createElement("form", { onSubmit: handleSubmit, className: "space-y-4" },
+                    React.createElement("div", null,
+                        React.createElement("label", { htmlFor: "projectName", className: "modal-label block text-sm font-medium mb-1" }, "Project Name"),
+                        React.createElement("input", { 
+                            type: "text", 
+                            id: "projectName", 
+                            value: projectName, 
+                            onChange: e => setProjectName(e.target.value), 
+                            required: true, 
+                            className: "w-full p-2 modal-input rounded-md",
+                            placeholder: "Enter project name"
+                        })
+                    ),
+                    React.createElement("div", null,
+                        React.createElement("label", { htmlFor: "clientAccessCode", className: "modal-label block text-sm font-medium mb-1" }, "Client Access Code"),
+                        React.createElement("input", { 
+                            type: "text", 
+                            id: "clientAccessCode", 
+                            value: clientAccessCode, 
+                            onChange: e => setClientAccessCode(e.target.value), 
+                            required: true, 
+                            className: "w-full p-2 modal-input rounded-md",
+                            placeholder: "Enter client access code"
+                        })
+                    ),
+                    React.createElement("div", { className: "flex justify-end space-x-3 pt-4" },
+                        React.createElement("button", { 
+                            type: "button", 
+                            onClick: onClose, 
+                            className: "px-4 py-2 rounded-md bg-slate-200 hover:bg-slate-300 text-slate-700" 
+                        }, "Cancel"),
+                        React.createElement("button", { 
+                            type: "submit", 
+                            className: "px-4 py-2 rounded-md bg-green-600 hover:bg-green-700 text-white font-semibold" 
+                        }, "Add Project")
+                    )
+                )
+            )
+        );
+    };
+</script>

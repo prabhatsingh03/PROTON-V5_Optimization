@@ -1,0 +1,553 @@
+<script type="text/babel">
+    const ApprovalDashboard = ({ pendingAdmins, onApprove, onReject, setNotification, setAppError }) => {
+        const handleApproveClick = (email) => {
+            makeAuthenticatedRequest('/api/approve_admin', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email: email })
+            })
+                .then(res => {
+                    if (!res.ok) {
+                        return res.json().then(err => { throw new Error(err.message || 'Approval failed') });
+                    }
+                    return res.json();
+                })
+                .then(data => {
+                    onApprove(email);
+                    setNotification({ message: data.message, type: 'success' });
+                })
+                .catch(err => setAppError(err.message));
+        };
+        const handleRejectClick = (email) => {
+            if (window.confirm(`Are you sure you want to reject and delete the admin request for ${email}? This action cannot be undone.`)) {
+                makeAuthenticatedRequest('/api/reject_admin', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email: email })
+                })
+                    .then(res => {
+                        if (!res.ok) {
+                            return res.json().then(err => { throw new Error(err.message || 'Rejection failed') });
+                        }
+                        return res.json();
+                    })
+                    .then(data => {
+                        onReject(email);
+                        setNotification({ message: data.message, type: 'info' });
+                    })
+                    .catch(err => setAppError(err.message));
+            }
+        };
+        if (!pendingAdmins || pendingAdmins.length === 0) {
+            return null;
+        }
+        return React.createElement('div', { className: 'mb-6 p-4 bg-amber-100 border-l-4 border-amber-500 shadow rounded-lg' },
+            React.createElement('h3', { className: 'text-lg font-semibold text-amber-800 mb-2 flex items-center' },
+                React.createElement(UserCheck, { size: 20, className: "mr-2" }),
+                'Pending Admin Approvals'
+            ),
+            React.createElement('ul', { className: 'space-y-2' },
+                pendingAdmins.map(admin => React.createElement('li', {
+                    key: admin.email,
+                    className: 'flex items-center justify-between bg-white p-2 rounded-md shadow-sm'
+                },
+                    React.createElement('span', { className: 'text-sm text-slate-700' }, admin.email),
+                    React.createElement('div', { className: 'flex items-center gap-2' },
+                        React.createElement('button', {
+                            onClick: () => handleRejectClick(admin.email),
+                            className: 'px-3 py-1 bg-red-500 text-white text-xs font-semibold rounded-md hover:bg-red-600 transition-colors'
+                        },
+                            'Reject'
+                        ),
+                        React.createElement('button', {
+                            onClick: () => handleApproveClick(admin.email),
+                            className: 'px-3 py-1 bg-green-500 text-white text-xs font-semibold rounded-md hover:bg-green-600 transition-colors'
+                        },
+                            'Approve'
+                        )
+                    )
+                ))
+            )
+        );
+    };
+
+    const UserManagementModal = ({ onClose, loggedInUser, onUserCreated, onUserUpdated, onUserDeleted }) => {
+        const { useState, useEffect } = React;
+        const [users, setUsers] = useState([]);
+        const [isLoading, setIsLoading] = useState(false);
+        const [showCreateForm, setShowCreateForm] = useState(false);
+        const [editingUser, setEditingUser] = useState(null);
+        const [formData, setFormData] = useState({ email: '', password: '', role: 'org_user', status: 'approved' });
+        const [error, setError] = useState('');
+        const [orgAdminCount, setOrgAdminCount] = useState(0);
+
+        // Role Badge Helper
+        const getRoleBadge = (role) => {
+            const badges = {
+                'super_admin': { label: 'Super Admin', color: 'bg-purple-100 text-purple-700' },
+                'org_admin': { label: 'Org Admin', color: 'bg-blue-100 text-blue-700' },
+                'org_user': { label: 'User', color: 'bg-green-100 text-green-700' },
+                'client': { label: 'Client', color: 'bg-slate-100 text-slate-700' }
+            };
+            
+            const badge = badges[role] || badges['org_user'];
+            
+            return React.createElement('span', {
+                className: `px-2 py-1 text-xs font-semibold rounded-full ${badge.color}`
+            }, badge.label);
+        };
+
+        // Centralized API error handler for 403
+        const handleAPIError = (response, data) => {
+            if (response && response.status === 403) {
+                const errorMsg = data?.message || 'You do not have permission to perform this action.';
+                setError(errorMsg);
+                // Special handling for org_admin limit error
+                if (errorMsg.includes('Maximum 2 org admins')) {
+                    // Keep modal open so user can select different role
+                }
+                return true;
+            }
+            return false;
+        };
+
+        // Fetch users on component mount
+        useEffect(() => {
+            fetchUsers();
+        }, []);
+
+        const fetchUsers = async () => {
+            setIsLoading(true);
+            try {
+                const response = await makeAuthenticatedRequest('/api/org/users', {
+                    method: 'GET',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                const data = await response.json();
+                if (handleAPIError(response, data)) return;
+                if (data.status === 'success') {
+                    setUsers(data.users);
+                    // Calculate org_admin count
+                    const adminCount = data.users.filter(u => u.role === 'org_admin').length;
+                    setOrgAdminCount(adminCount);
+                } else {
+                    setError(data.message || 'Failed to fetch users');
+                }
+            } catch (error) {
+                console.error('Error fetching users:', error);
+                setError('Failed to fetch users');
+            } finally {
+                setIsLoading(false);
+            }
+        };
+
+        const handleCreateUser = async (formData) => {
+            // Proactive check for admin limits
+            const usage = window.latestUsageStats;
+            if (usage && usage.at_limit && usage.at_limit.users) {
+                setError('You have reached the maximum number of team members for your plan.');
+                if (typeof window.refreshUsageStats === 'function') window.refreshUsageStats();
+                return;
+            }
+            try {
+                const response = await makeAuthenticatedRequest('/api/org/users', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(formData)
+                });
+                const data = await response.json();
+                if (handleAPIError(response, data)) return;
+                if (data.status === 'success') {
+                    // fetchUsers() will recalculate orgAdminCount from database
+                    fetchUsers();
+                    setShowCreateForm(false);
+                    setFormData({ email: '', password: '', role: 'org_user', status: 'approved' });
+                    onUserCreated(data.user);
+                } else {
+                    setError(data.message || 'Failed to create user');
+                }
+            } catch (error) {
+                console.error('Error creating user:', error);
+                setError('Failed to create user');
+            }
+        };
+
+        const handleUpdateUser = async (userId, formData) => {
+            try {
+                const response = await makeAuthenticatedRequest(`/api/org/users/${userId}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(formData)
+                });
+                const data = await response.json();
+                if (handleAPIError(response, data)) return;
+                if (data.status === 'success') {
+                    fetchUsers();
+                    setEditingUser(null);
+                    onUserUpdated(data.user);
+                } else {
+                    setError(data.message || 'Failed to update user');
+                }
+            } catch (error) {
+                console.error('Error updating user:', error);
+                setError('Failed to update user');
+            }
+        };
+
+        const handleChangeRole = async (userId, newRole) => {
+            // Find user to check current role
+            const user = users.find(u => u.id === userId);
+            if (!user) return;
+            
+            // Client-side validation: Check org_admin limit
+            if (newRole === 'org_admin' && user.role !== 'org_admin' && loggedInUser.role !== 'super_admin' && orgAdminCount >= 2) {
+                setError('Maximum 2 org admins allowed. Please change an existing admin\'s role first.');
+                return;
+            }
+            
+            try {
+                const response = await makeAuthenticatedRequest(`/api/org/users/${userId}/role`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ role: newRole })
+                });
+                const data = await response.json();
+                if (handleAPIError(response, data)) return;
+                if (data.status === 'success') {
+                    // fetchUsers() will recalculate orgAdminCount from database
+                    fetchUsers();
+                    setError('');
+                } else {
+                    setError(data.message || 'Failed to change role');
+                }
+            } catch (error) {
+                console.error('Error changing role:', error);
+                setError('Failed to change role');
+            }
+        };
+
+        const handleDeleteUser = async (userId) => {
+            if (!confirm('Are you sure you want to delete this user?')) return;
+            
+            // Find user to check role before deletion
+            const user = users.find(u => u.id === userId);
+            const wasOrgAdmin = user && user.role === 'org_admin';
+            
+            try {
+                const response = await makeAuthenticatedRequest(`/api/org/users/${userId}`, {
+                    method: 'DELETE',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                const data = await response.json();
+                if (handleAPIError(response, data)) return;
+                if (data.status === 'success') {
+                    // fetchUsers() will recalculate orgAdminCount from database
+                    fetchUsers();
+                    onUserDeleted(userId);
+                } else {
+                    setError(data.message || 'Failed to delete user');
+                }
+            } catch (error) {
+                console.error('Error deleting user:', error);
+                setError('Failed to delete user');
+            }
+        };
+
+        const resetForm = () => {
+            setFormData({ email: '', password: '', role: 'org_user', status: 'approved' });
+            setError('');
+        };
+
+        return React.createElement('div', {
+            className: 'fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4'
+        },
+            React.createElement('div', {
+                className: 'bg-white rounded-lg shadow-xl max-w-6xl w-full max-h-[90vh] overflow-hidden'
+            },
+                // Header
+                React.createElement('div', {
+                    className: 'flex items-center justify-between p-6 border-b border-gray-200'
+                },
+                    React.createElement('h2', {
+                        className: 'text-xl font-semibold text-gray-900'
+                    }, 'User Management'),
+                    React.createElement('div', {
+                        className: 'flex items-center space-x-2'
+                    },
+                        React.createElement('span', {
+                            className: `text-sm px-2 py-1 rounded ${orgAdminCount < 2 ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}`
+                        }, `Org Admins: ${orgAdminCount}/2`),
+                        canManageUsers(loggedInUser.role) && React.createElement('button', {
+                            onClick: () => { setShowCreateForm(true); resetForm(); },
+                            className: 'px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors'
+                        }, 'Add User'),
+                        React.createElement('button', {
+                            onClick: onClose,
+                            className: 'p-2 text-gray-400 hover:text-gray-600 transition-colors'
+                        }, React.createElement(X, { size: 20 }))
+                    )
+                ),
+                
+                // Content
+                React.createElement('div', {
+                    className: 'p-6 overflow-y-auto max-h-[calc(90vh-140px)]'
+                },
+                    error && React.createElement('div', {
+                        className: 'mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm'
+                    }, error),
+                    
+                    // Users Table
+                    React.createElement('div', {
+                        className: 'overflow-x-auto'
+                    },
+                        React.createElement('table', {
+                            className: 'min-w-full divide-y divide-gray-200'
+                        },
+                            React.createElement('thead', {
+                                className: 'bg-gray-50'
+                            },
+                                React.createElement('tr', null,
+                                    React.createElement('th', {
+                                        className: 'px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider'
+                                    }, 'Email'),
+                                    React.createElement('th', {
+                                        className: 'px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider'
+                                    }, 'Role'),
+                                    React.createElement('th', {
+                                        className: 'px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider'
+                                    }, 'Status'),
+                                    React.createElement('th', {
+                                        className: 'px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider'
+                                    }, 'Created'),
+                                    isSuperAdmin(loggedInUser.role) && React.createElement('th', {
+                                        className: 'px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider'
+                                    }, 'Organization'),
+                                    React.createElement('th', {
+                                        className: 'px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider'
+                                    }, 'Actions')
+                                )
+                            ),
+                            React.createElement('tbody', {
+                                className: 'bg-white divide-y divide-gray-200'
+                            },
+                                isLoading ? React.createElement('tr', null,
+                                    React.createElement('td', {
+                                        colSpan: isSuperAdmin(loggedInUser.role) ? 6 : 5,
+                                        className: 'px-6 py-4 text-center text-gray-500'
+                                    }, 'Loading users...')
+                                ) : users.map(user => React.createElement('tr', {
+                                    key: user.id,
+                                    className: 'hover:bg-gray-50'
+                                },
+                                    React.createElement('td', {
+                                        className: 'px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900'
+                                    }, user.email),
+                                    React.createElement('td', {
+                                        className: 'px-6 py-4 whitespace-nowrap text-sm text-gray-500'
+                                    }, getRoleBadge(user.role)),
+                                    React.createElement('td', {
+                                        className: 'px-6 py-4 whitespace-nowrap text-sm text-gray-500'
+                                    }, user.status),
+                                    React.createElement('td', {
+                                        className: 'px-6 py-4 whitespace-nowrap text-sm text-gray-500'
+                                    }, new Date(user.created_at).toLocaleDateString()),
+                                    isSuperAdmin(loggedInUser.role) && React.createElement('td', {
+                                        className: 'px-6 py-4 whitespace-nowrap text-sm text-gray-500'
+                                    }, user.org_id),
+                                    React.createElement('td', {
+                                        className: 'px-6 py-4 whitespace-nowrap text-sm font-medium'
+                                    },
+                                        React.createElement('div', {
+                                            className: 'flex items-center space-x-2'
+                                        },
+                                            canManageUsers(loggedInUser.role) && user.role !== 'super_admin' && user.id !== loggedInUser.id && React.createElement('button', {
+                                                onClick: () => handleChangeRole(user.id, user.role === 'org_admin' ? 'org_user' : 'org_admin'),
+                                                className: 'text-blue-600 hover:text-blue-900 text-xs'
+                                            }, user.role === 'org_admin' ? 'Demote' : 'Promote'),
+                                            canManageUsers(loggedInUser.role) && user.role !== 'super_admin' && user.id !== loggedInUser.id && React.createElement('button', {
+                                                onClick: () => handleDeleteUser(user.id),
+                                                className: 'text-red-600 hover:text-red-900 text-xs'
+                                            }, 'Delete')
+                                        )
+                                    )
+                                ))
+                            )
+                        )
+                    ),
+                    
+                    // Create/Edit Form
+                    (showCreateForm || editingUser) && React.createElement('div', {
+                        className: 'mt-6 p-4 bg-gray-50 rounded-lg'
+                    },
+                        React.createElement('h3', {
+                            className: 'text-lg font-medium text-gray-900 mb-4'
+                        }, editingUser ? 'Edit User' : 'Create New User'),
+                        
+                        React.createElement('div', {
+                            className: 'grid grid-cols-1 md:grid-cols-2 gap-4'
+                        },
+                            React.createElement('div', null,
+                                React.createElement('label', {
+                                    className: 'block text-sm font-medium text-gray-700 mb-1'
+                                }, 'Email'),
+                                React.createElement('input', {
+                                    type: 'email',
+                                    value: formData.email,
+                                    onChange: (e) => setFormData({ ...formData, email: e.target.value }),
+                                    className: 'w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500',
+                                    placeholder: 'user@example.com'
+                                })
+                            ),
+                            React.createElement('div', null,
+                                React.createElement('label', {
+                                    className: 'block text-sm font-medium text-gray-700 mb-1'
+                                }, 'Password'),
+                                React.createElement('input', {
+                                    type: 'password',
+                                    value: formData.password,
+                                    onChange: (e) => setFormData({ ...formData, password: e.target.value }),
+                                    className: 'w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500',
+                                    placeholder: 'Enter password'
+                                })
+                            ),
+                            React.createElement('div', null,
+                                React.createElement('label', {
+                                    className: 'block text-sm font-medium text-gray-700 mb-1'
+                                }, 
+                                    'Role',
+                                    React.createElement('span', {
+                                        className: 'ml-2 text-xs text-gray-500'
+                                    }, `Org Admins: ${orgAdminCount}/2`)
+                                ),
+                                React.createElement('select', {
+                                    value: formData.role,
+                                    onChange: (e) => setFormData({ ...formData, role: e.target.value }),
+                                    className: 'w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500'
+                                },
+                                    React.createElement('option', { value: 'org_user' }, 'Org User'),
+                                    React.createElement('option', {
+                                        value: 'org_admin',
+                                        disabled: orgAdminCount >= 2 && loggedInUser.role !== 'super_admin' && (!editingUser || editingUser.role !== 'org_admin')
+                                    }, orgAdminCount >= 2 && loggedInUser.role !== 'super_admin' && (!editingUser || editingUser.role !== 'org_admin') ? 'Org Admin (Limit Reached)' : 'Org Admin')
+                                ),
+                                (orgAdminCount >= 2 && loggedInUser.role !== 'super_admin' && (!editingUser || editingUser.role !== 'org_admin')) && React.createElement('div', {
+                                    className: 'mt-1 text-sm text-yellow-600'
+                                }, '⚠️ Maximum 2 org admins allowed. Please change an existing admin\'s role to org_user before adding new admins.')
+                            ),
+                            React.createElement('div', null,
+                                React.createElement('label', {
+                                    className: 'block text-sm font-medium text-gray-700 mb-1'
+                                }, 'Status'),
+                                React.createElement('select', {
+                                    value: formData.status,
+                                    onChange: (e) => setFormData({ ...formData, status: e.target.value }),
+                                    className: 'w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500'
+                                },
+                                    React.createElement('option', { value: 'approved' }, 'Approved'),
+                                    React.createElement('option', { value: 'suspended' }, 'Suspended'),
+                                    React.createElement('option', { value: 'pending' }, 'Pending')
+                                )
+                            )
+                        ),
+                        
+                        React.createElement('div', {
+                            className: 'flex items-center justify-end space-x-3 mt-4'
+                        },
+                            React.createElement('button', {
+                                onClick: () => { setShowCreateForm(false); setEditingUser(null); resetForm(); },
+                                className: 'px-4 py-2 text-gray-700 bg-gray-200 rounded-lg hover:bg-gray-300 transition-colors'
+                            }, 'Cancel'),
+                            React.createElement('button', {
+                                onClick: () => editingUser ? handleUpdateUser(editingUser.id, formData) : handleCreateUser(formData),
+                                className: 'px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors'
+                            }, editingUser ? 'Update User' : 'Create User')
+                        )
+                    )
+                )
+            )
+        );
+    };
+
+    const ActivityLogModal = ({ onClose }) => {
+        const { useState, useEffect, useRef } = React;
+        const [logs, setLogs] = useState([]);
+        const [isLoading, setIsLoading] = useState(true);
+        const modalContentRef = useRef(null);
+        useEffect(() => {
+            makeAuthenticatedRequest('/api/activity_log', { method: 'GET', headers: { 'Content-Type': 'application/json' } })
+                .then(res => res.json())
+                .then(data => setLogs(data))
+                .catch(err => console.error("Failed to fetch activity log:", err))
+                .finally(() => setIsLoading(false));
+            const handleClickOutside = (event) => {
+                if (modalContentRef.current && !modalContentRef.current.contains(event.target)) {
+                    onClose();
+                }
+            };
+            document.addEventListener("mousedown", handleClickOutside);
+            return () => document.removeEventListener("mousedown", handleClickOutside);
+        }, [onClose]);
+        return React.createElement("div", { className: "fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center p-4 z-50 backdrop-blur-sm" },
+            React.createElement("div", { ref: modalContentRef, className: "modal-content p-6 rounded-xl shadow-xl w-full max-w-4xl max-h-[90vh] flex flex-col" },
+                React.createElement("div", { className: "flex justify-between items-center mb-4 text-blue-600 border-b pb-2" },
+                    React.createElement("h2", { className: "text-xl font-semibold flex items-center" },
+                        React.createElement(HistoryIcon, { size: 20, className: "mr-2" }),
+                        "Admin Activity Log"
+                    ),
+                    React.createElement("button", {
+                        onClick: async () => {
+                            try {
+                                const response = await makeAuthenticatedRequest('/api/activity_log/download', { 
+                                    method: 'GET',
+                                    headers: { 'Content-Type': 'application/json' }
+                                });
+                                const blob = await response.blob();
+                                const url = window.URL.createObjectURL(blob);
+                                const link = document.createElement('a');
+                                link.href = url;
+                                link.download = 'activity_log.csv';
+                                document.body.appendChild(link);
+                                link.click();
+                                document.body.removeChild(link);
+                                window.URL.revokeObjectURL(url);
+                            } catch (error) {
+                                alert('Failed to download activity log: ' + error.message);
+                            }
+                        },
+                        className: "px-3 py-1 bg-green-600 hover:bg-green-700 text-white text-sm rounded-md flex items-center"
+                    },
+                        React.createElement("svg", { className: "w-4 h-4 mr-1", fill: "none", stroke: "currentColor", viewBox: "0 0 24 24" },
+                            React.createElement("path", { strokeLinecap: "round", strokeLinejoin: "round", strokeWidth: "2", d: "M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" })
+                        ),
+                        "Download CSV"
+                    )
+                ),
+                React.createElement("div", { className: "flex-grow overflow-y-auto" },
+                    React.createElement("p", { className: "text-sm text-slate-500 mb-2 italic" }, "Showing latest 100 entries. Use 'Download CSV' for complete log."),
+                    isLoading ? React.createElement("p", null, "Loading logs...") :
+                        React.createElement("table", { className: "min-w-full divide-y divide-slate-200" },
+                            React.createElement("thead", { className: "bg-slate-50 sticky top-0" }, React.createElement("tr", null,
+                                React.createElement("th", { className: "px-3 py-2 text-left text-xs font-semibold text-slate-600 uppercase" }, "Timestamp"),
+                                React.createElement("th", { className: "px-3 py-2 text-left text-xs font-semibold text-slate-600 uppercase" }, "User"),
+                                React.createElement("th", { className: "px-3 py-2 text-left text-xs font-semibold text-slate-600 uppercase" }, "Project"),
+                                React.createElement("th", { className: "px-3 py-2 text-left text-xs font-semibold text-slate-600 uppercase" }, "Action"),
+                                React.createElement("th", { className: "px-3 py-2 text-left text-xs font-semibold text-slate-600 uppercase" }, "Details"),
+                            )),
+                            React.createElement("tbody", { className: "bg-white divide-y divide-slate-200" },
+                                logs.map((log, index) => React.createElement("tr", { key: index, className: "hover:bg-slate-50" },
+                                    React.createElement("td", { className: "px-3 py-2 whitespace-nowrap text-xs text-slate-500" }, new Date(log.timestamp).toLocaleString()),
+                                    React.createElement("td", { className: "px-3 py-2 whitespace-nowrap text-sm text-slate-800" }, log.user),
+                                    React.createElement("td", { className: "px-3 py-2 whitespace-nowrap text-sm text-slate-600" }, log.project || 'N/A'),
+                                    React.createElement("td", { className: "px-3 py-2 whitespace-nowrap text-sm text-slate-600" }, log.action),
+                                    React.createElement("td", { className: "px-3 py-2 text-sm text-slate-600" }, log.details)
+                                ))
+                            )
+                        )
+                ),
+                React.createElement("div", { className: "flex justify-end pt-6 mt-auto border-t" },
+                    React.createElement("button", { type: "button", onClick: onClose, className: "px-4 py-2 bg-slate-200 hover:bg-slate-300 rounded-md text-slate-700" }, "Close")
+                )
+            )
+        );
+    };
+</script>

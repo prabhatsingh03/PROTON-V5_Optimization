@@ -1,0 +1,316 @@
+<script type="text/babel">
+    const DocumentsTab = ({ selectedProject, tasks, loggedInUserType, isTrialExpired }) => {
+        const { useState, useEffect } = React;
+        const [documents, setDocuments] = useState([]);
+        const [viewMode, setViewMode] = useState('grid'); // grid or list
+        const [isUploading, setIsUploading] = useState(false);
+        const [uploadProgress, setUploadProgress] = useState(0);
+        const [selectedFiles, setSelectedFiles] = useState([]);
+        const [searchTerm, setSearchTerm] = useState('');
+        const [filterType, setFilterType] = useState('all'); // all, pdf, image, doc, excel
+        
+        // Load documents on mount
+        useEffect(() => {
+            if (selectedProject) {
+                makeAuthenticatedRequest(`/api/documents?project_name=${encodeURIComponent(selectedProject)}`, {
+                    method: 'GET',
+                    headers: { 'Content-Type': 'application/json' }
+                })
+                .then(res => res.json())
+                .then(data => {
+                    if (data.status === 'success' && data.documents) {
+                        setDocuments(data.documents);
+                    }
+                })
+                .catch(err => console.error('Failed to load documents:', err));
+            }
+        }, [selectedProject]);
+        
+        // Handle file upload
+        const handleFileUpload = async (files) => {
+            if (!files || files.length === 0) return;
+            
+            // Proactive file limit check
+            const usage = window.latestUsageStats;
+            if (usage && usage.limits && usage.files_by_project && selectedProject) {
+                const current = usage.files_by_project[selectedProject] || 0;
+                const limit = usage.limits.files_per_project ?? 999999;
+                const pending = files.length;
+                if (limit < 999999 && current + pending > limit) {
+                    alert(`Uploading ${pending} files would exceed the per-project limit (${current}/${limit}).`);
+                    if (typeof window.refreshUsageStats === 'function') window.refreshUsageStats();
+                    return;
+                }
+            }
+            
+            setIsUploading(true);
+            setUploadProgress(0);
+            
+            const formData = new FormData();
+            Array.from(files).forEach(file => {
+                formData.append('files[]', file);
+            });
+            formData.append('project_name', selectedProject);
+            formData.append('task_id', 'general'); // General project documents
+            
+            try {
+                const response = await makeAuthenticatedRequest('/api/upload_document', {
+                    method: 'POST',
+                    body: formData
+                });
+                const result = await response.json();
+                if (result.status === 'success') {
+                    // Reload documents
+                    makeAuthenticatedRequest(`/api/documents?project_name=${encodeURIComponent(selectedProject)}`, {
+                        method: 'GET',
+                        headers: { 'Content-Type': 'application/json' }
+                    })
+                    .then(res => res.json())
+                    .then(data => {
+                        if (data.status === 'success' && data.documents) {
+                            setDocuments(data.documents);
+                        }
+                    });
+                    setSelectedFiles([]);
+                } else {
+                    throw new Error(result.message || 'File upload failed');
+                }
+            } catch (error) {
+                alert(`Error uploading files: ${error.message}`);
+            } finally {
+                setIsUploading(false);
+                setUploadProgress(0);
+            }
+        };
+        
+        // Handle file download
+        const handleFileDownload = async (filename, taskId = 'general') => {
+            try {
+                const response = await makeAuthenticatedRequest(
+                    `/download_document/${encodeURIComponent(selectedProject)}/${encodeURIComponent(taskId)}/${encodeURIComponent(filename)}`,
+                    { method: 'GET' }
+                );
+                if (!response.ok) {
+                    if (response.status === 403) {
+                        alert("Access denied. You don't have permission to download this file.");
+                        return;
+                    }
+                    if (response.status === 404) {
+                        alert('File not found.');
+                        return;
+                    }
+                    throw new Error('Download failed');
+                }
+                const blob = await response.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                window.URL.revokeObjectURL(url);
+            } catch (err) {
+                alert(`Download error: ${err.message}`);
+            }
+        };
+        
+        // Handle file delete
+        const handleFileDelete = async (filename) => {
+            if (!window.confirm(`Are you sure you want to delete "${filename}"?`)) return;
+            
+            try {
+                const response = await makeAuthenticatedRequest(`/api/documents/${encodeURIComponent(filename)}`, {
+                    method: 'DELETE',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                const result = await response.json();
+                if (result.status === 'success') {
+                    setDocuments(documents.filter(doc => doc.filename !== filename));
+                } else {
+                    throw new Error(result.message || 'Delete failed');
+                }
+            } catch (error) {
+                alert(`Error deleting file: ${error.message}`);
+            }
+        };
+        
+        // Get file type icon
+        const getFileIcon = (filename) => {
+            const ext = filename.split('.').pop().toLowerCase();
+            if (['pdf'].includes(ext)) return '📄';
+            if (['doc', 'docx'].includes(ext)) return '📝';
+            if (['xls', 'xlsx'].includes(ext)) return '📊';
+            if (['jpg', 'jpeg', 'png', 'gif'].includes(ext)) return '🖼️';
+            return '📎';
+        };
+        
+        // Filter documents
+        const filteredDocuments = documents.filter(doc => {
+            const matchesSearch = !searchTerm || doc.filename.toLowerCase().includes(searchTerm.toLowerCase());
+            const matchesType = filterType === 'all' || doc.filename.split('.').pop().toLowerCase() === filterType;
+            return matchesSearch && matchesType;
+        });
+        
+        return React.createElement("div", { className: "documents-tab-container space-y-6" },
+            // Gradient Header with Controls
+            React.createElement("div", { className: "bg-gradient-to-r from-teal-500 to-blue-600 text-white p-6 rounded-xl shadow-lg" },
+                React.createElement("div", { className: "flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4" },
+                    React.createElement("h2", { className: "text-2xl font-bold" }, "Project Documents"),
+                    React.createElement("div", { className: "flex items-center gap-4" },
+                        React.createElement("div", { className: "flex gap-2 bg-white/20 rounded-lg p-1" },
+                            React.createElement("button", {
+                                onClick: () => setViewMode('grid'),
+                                className: `px-4 py-2 rounded-md text-sm font-semibold transition-colors ${
+                                    viewMode === 'grid' ? 'bg-white text-teal-600' : 'text-white hover:bg-white/20'
+                                }`
+                            }, "Grid"),
+                            React.createElement("button", {
+                                onClick: () => setViewMode('list'),
+                                className: `px-4 py-2 rounded-md text-sm font-semibold transition-colors ${
+                                    viewMode === 'list' ? 'bg-white text-teal-600' : 'text-white hover:bg-white/20'
+                                }`
+                            }, "List")
+                        ),
+                        React.createElement("input", {
+                            type: "text",
+                            placeholder: "Search documents...",
+                            value: searchTerm,
+                            onChange: (e) => setSearchTerm(e.target.value),
+                            className: "px-4 py-2 rounded-lg text-gray-800 focus:ring-2 focus:ring-white focus:outline-none"
+                        }),
+                        React.createElement("select", {
+                            value: filterType,
+                            onChange: (e) => setFilterType(e.target.value),
+                            className: "px-4 py-2 rounded-lg text-gray-800 focus:ring-2 focus:ring-white focus:outline-none"
+                        },
+                            React.createElement("option", { value: "all" }, "All Types"),
+                            React.createElement("option", { value: "pdf" }, "PDF"),
+                            React.createElement("option", { value: "doc" }, "Documents"),
+                            React.createElement("option", { value: "xls" }, "Spreadsheets"),
+                            React.createElement("option", { value: "jpg" }, "Images")
+                        )
+                    )
+                )
+            ),
+            
+            // Upload Section
+            React.createElement("div", {
+                className: "documents-upload-zone border-2 border-dashed border-gray-300 rounded-xl p-8 text-center hover:border-teal-500 transition-colors cursor-pointer",
+                onDragOver: (e) => { e.preventDefault(); e.currentTarget.classList.add('border-teal-500'); },
+                onDragLeave: (e) => { e.currentTarget.classList.remove('border-teal-500'); },
+                onDrop: (e) => {
+                    e.preventDefault();
+                    e.currentTarget.classList.remove('border-teal-500');
+                    const files = e.dataTransfer.files;
+                    if (files.length > 0) {
+                        handleFileUpload(files);
+                    }
+                },
+                onClick: () => {
+                    const input = document.createElement('input');
+                    input.type = 'file';
+                    input.multiple = true;
+                    input.onchange = (e) => {
+                        if (e.target.files.length > 0) {
+                            handleFileUpload(e.target.files);
+                        }
+                    };
+                    input.click();
+                }
+            },
+                React.createElement("p", { className: "text-gray-600 mb-2" }, "Drag files here or click to browse"),
+                React.createElement("p", { className: "text-sm text-gray-400" }, "Maximum 5 files at a time"),
+                isUploading && React.createElement("div", { className: "mt-4" },
+                    React.createElement("div", { className: "w-full bg-gray-200 rounded-full h-2" },
+                        React.createElement("div", {
+                            className: "bg-gradient-to-r from-teal-500 to-blue-600 h-2 rounded-full transition-all",
+                            style: { width: `${uploadProgress}%` }
+                        })
+                    )
+                )
+            ),
+            
+            // Documents Display
+            filteredDocuments.length > 0 ? (
+                viewMode === 'grid' ? (
+                    React.createElement("div", { className: "documents-grid grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4" },
+                        filteredDocuments.map((doc, idx) => (
+                            React.createElement("div", {
+                                key: idx,
+                                className: "documents-card bg-white rounded-xl shadow-md p-4 hover:shadow-xl transition-shadow border border-gray-200 hover:border-teal-500"
+                            },
+                                React.createElement("div", { className: "text-4xl text-center mb-2" }, getFileIcon(doc.filename)),
+                                React.createElement("p", {
+                                    className: "text-sm font-semibold text-gray-800 truncate",
+                                    title: doc.filename
+                                }, doc.filename),
+                                React.createElement("p", { className: "text-xs text-gray-500 mt-1" },
+                                    doc.size ? `${(doc.size / 1024).toFixed(2)} KB` : ''
+                                ),
+                                React.createElement("div", { className: "flex gap-2 mt-3" },
+                                    React.createElement("button", {
+                                        onClick: () => handleFileDownload(doc.filename, doc.task_id),
+                                        className: "flex-1 px-2 py-1 bg-teal-500 hover:bg-teal-600 text-white text-xs rounded transition-colors"
+                                    }, "Download"),
+                                    loggedInUserType !== 'client' && React.createElement("button", {
+                                        onClick: () => handleFileDelete(doc.filename),
+                                        className: "px-2 py-1 bg-red-500 hover:bg-red-600 text-white text-xs rounded transition-colors"
+                                    }, "Delete")
+                                )
+                            )
+                        ))
+                    )
+                ) : (
+                    React.createElement("div", { className: "bg-white rounded-xl shadow-md overflow-hidden" },
+                        React.createElement("table", { className: "min-w-full divide-y divide-gray-200" },
+                            React.createElement("thead", { className: "bg-gray-50" },
+                                React.createElement("tr", null,
+                                    React.createElement("th", { className: "px-4 py-3 text-left text-xs font-semibold text-gray-700" }, "Icon"),
+                                    React.createElement("th", { className: "px-4 py-3 text-left text-xs font-semibold text-gray-700" }, "Name"),
+                                    React.createElement("th", { className: "px-4 py-3 text-left text-xs font-semibold text-gray-700" }, "Type"),
+                                    React.createElement("th", { className: "px-4 py-3 text-left text-xs font-semibold text-gray-700" }, "Size"),
+                                    React.createElement("th", { className: "px-4 py-3 text-left text-xs font-semibold text-gray-700" }, "Date"),
+                                    React.createElement("th", { className: "px-4 py-3 text-left text-xs font-semibold text-gray-700" }, "Actions")
+                                )
+                            ),
+                            React.createElement("tbody", { className: "divide-y divide-gray-200" },
+                                filteredDocuments.map((doc, idx) => (
+                                    React.createElement("tr", {
+                                        key: idx,
+                                        className: "documents-list-row hover:bg-gray-50 transition-colors"
+                                    },
+                                        React.createElement("td", { className: "px-4 py-3 text-2xl" }, getFileIcon(doc.filename)),
+                                        React.createElement("td", { className: "px-4 py-3 text-sm font-medium text-gray-800" }, doc.filename),
+                                        React.createElement("td", { className: "px-4 py-3 text-sm text-gray-500" }, doc.filename.split('.').pop().toUpperCase()),
+                                        React.createElement("td", { className: "px-4 py-3 text-sm text-gray-500" }, doc.size ? `${(doc.size / 1024).toFixed(2)} KB` : '-'),
+                                        React.createElement("td", { className: "px-4 py-3 text-sm text-gray-500" }, doc.upload_date || '-'),
+                                        React.createElement("td", { className: "px-4 py-3 text-sm" },
+                                            React.createElement("div", { className: "flex gap-2" },
+                                                React.createElement("button", {
+                                                    onClick: () => handleFileDownload(doc.filename, doc.task_id),
+                                                    className: "px-3 py-1 bg-teal-500 hover:bg-teal-600 text-white text-xs rounded transition-colors"
+                                                }, "Download"),
+                                                loggedInUserType !== 'client' && React.createElement("button", {
+                                                    onClick: () => handleFileDelete(doc.filename),
+                                                    className: "px-3 py-1 bg-red-500 hover:bg-red-600 text-white text-xs rounded transition-colors"
+                                                }, "Delete")
+                                            )
+                                        )
+                                    )
+                                ))
+                            )
+                        )
+                    )
+                )
+            ) : (
+                React.createElement("div", { className: "documents-empty-state bg-white rounded-xl shadow-md p-12 text-center" },
+                    React.createElement("div", { className: "text-6xl mb-4" }, "📁"),
+                    React.createElement("p", { className: "text-gray-600 text-lg font-semibold" }, "No documents yet"),
+                    React.createElement("p", { className: "text-gray-400 text-sm mt-2" }, "Upload your first file to get started")
+                )
+            )
+        );
+    };
+</script>
+

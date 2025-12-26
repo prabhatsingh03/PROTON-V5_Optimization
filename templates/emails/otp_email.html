@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PROTON OTP Verification</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: Arial, Helvetica, sans-serif;
+            background-color: #f4f6fb;
+            color: #1f2937;
+        }
+        .wrapper {
+            width: 100%;
+            background-color: #f4f6fb;
+            padding: 24px 0;
+        }
+        .card {
+            max-width: 600px;
+            margin: 0 auto;
+            background-color: #ffffff;
+            border-radius: 12px;
+            box-shadow: 0 8px 24px rgba(31, 41, 55, 0.1);
+            overflow: hidden;
+        }
+        .header {
+            background: linear-gradient(135deg, #1d4ed8, #2563eb);
+            padding: 32px;
+            text-align: center;
+            color: #ffffff;
+        }
+        .header h1 {
+            margin: 0;
+            font-size: 24px;
+            letter-spacing: 0.05em;
+        }
+        .content {
+            padding: 32px;
+        }
+        .greeting {
+            margin: 0 0 16px;
+            font-size: 18px;
+            font-weight: 600;
+        }
+        .message {
+            margin: 0 0 24px;
+            line-height: 1.6;
+        }
+        .otp-box {
+            background-color: #eef2ff;
+            border: 1px solid #c7d2fe;
+            border-radius: 10px;
+            text-align: center;
+            padding: 24px;
+            margin: 16px 0 24px;
+        }
+        .otp-code {
+            font-size: 32px;
+            font-weight: 700;
+            letter-spacing: 0.4em;
+            color: #1d4ed8;
+            font-family: "Courier New", Courier, monospace;
+        }
+        .expiry {
+            margin: 0 0 24px;
+            font-size: 14px;
+            color: #6b7280;
+        }
+        .alert {
+            background-color: #fef3c7;
+            border: 1px solid #fcd34d;
+            border-radius: 10px;
+            padding: 16px;
+            font-size: 14px;
+            color: #92400e;
+            line-height: 1.5;
+        }
+        .footer {
+            padding: 24px 32px 32px;
+            font-size: 14px;
+            color: #6b7280;
+            line-height: 1.5;
+        }
+        .footer a {
+            color: #2563eb;
+            text-decoration: none;
+        }
+        @media (max-width: 600px) {
+            .card {
+                margin: 0 16px;
+            }
+            .content, .footer {
+                padding: 24px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="wrapper">
+        <div class="card">
+            <div class="header">
+                <h1>PROTON</h1>
+                <p style="margin: 8px 0 0; font-size: 14px; letter-spacing: 0.1em;">Secure Access Verification</p>
+            </div>
+            <div class="content">
+                <p class="greeting">Hello {{USER_NAME}},</p>
+                <p class="message">
+                    You requested to log in to your PROTON account. Use the One-Time Passcode (OTP) below to complete your verification.
+                </p>
+                <div class="otp-box">
+                    <div class="otp-code">{{OTP_CODE}}</div>
+                </div>
+                <p class="expiry">
+                    This code expires in {{EXPIRY_MINUTES}} minutes. For your security, do not share this OTP with anyone.
+                </p>
+                <div class="alert">
+                    Didn’t request this code? Please ignore this email or contact the PROTON support team immediately so we can keep your account secure.
+                </div>
+            </div>
+            <div class="footer">
+                <p>Best regards,<br><strong>The PROTON Team</strong></p>
+                <p>Need help? Contact us at <a href="mailto:support@proton.com">support@proton.com</a></p>
+                <p style="margin-top: 16px; font-size: 12px;">© {{CURRENT_YEAR}} PROTON. All rights reserved.</p>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
+

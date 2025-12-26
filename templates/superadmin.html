@@ -1,0 +1,1255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PROTON - SuperAdmin Dashboard</title>
+<link rel="icon" href="/static/favicon.ico">
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<style>
+  body { 
+    font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji"; 
+    background: linear-gradient(to bottom, #f8fafc, #f1f5f9);
+  }
+  .chart-container { position: relative; height: 300px; }
+  
+  /* Smooth transitions */
+  * { transition: all 0.2s ease-in-out; }
+  
+  /* Custom scrollbar */
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: #f1f5f9; }
+  ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+  
+  /* Table row hover effect */
+  .table-row-hover:hover { 
+    background: linear-gradient(to right, #f8fafc, #f1f5f9) !important;
+    transform: translateX(2px);
+    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+  }
+  
+  /* Card hover effect */
+  .card-hover:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 10px 25px rgba(0,0,0,0.1) !important;
+  }
+  
+  /* Button hover effects */
+  .btn-primary:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+  }
+  
+  /* Animations */
+  @keyframes fade-in {
+    from { opacity: 0; transform: scale(0.95); }
+    to { opacity: 1; transform: scale(1); }
+  }
+  
+  @keyframes slide-in {
+    from { transform: translateX(100%); opacity: 0; }
+    to { transform: translateX(0); opacity: 1; }
+  }
+  
+  .animate-fade-in {
+    animation: fade-in 0.2s ease-out;
+  }
+  
+  .animate-slide-in {
+    animation: slide-in 0.3s ease-out;
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+  const { useState, useEffect, useMemo, useCallback, useRef } = React;
+
+  // JWT TOKEN REFRESH UTILITY
+  // Attempts to refresh an expired access token using the refresh token.
+  // Returns: new access_token string on success, null on failure
+  // Side effects: Updates 'access_token' in localStorage on success
+  async function refreshAccessToken() {
+    const refreshToken = localStorage.getItem('refresh_token');
+    if (!refreshToken) return null;
+    try {
+      const res = await fetch('/api/refresh', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ refresh_token: refreshToken }) });
+      if (!res.ok) return null;
+      const data = await res.json();
+      if (data && data.access_token) {
+        localStorage.setItem('access_token', data.access_token);
+        return data.access_token;
+      }
+      return null;
+    } catch { return null; }
+  }
+
+  // AUTHENTICATED REQUEST WRAPPER
+  // Makes HTTP requests with automatic JWT token injection and refresh.
+  // Automatically retries request once if 401 (Unauthorized) is received.
+  // Shows session timeout message if refresh fails.
+  // Returns: fetch Response object
+  async function makeAuthenticatedRequest(url, options = {}) {
+    let token = localStorage.getItem('access_token');
+    
+    // Check if token is expired before making request
+    if (isTokenExpired(token)) {
+      // Try to refresh first
+      const newToken = await refreshAccessToken();
+      if (!newToken || isTokenExpired(newToken)) {
+        handleSessionTimeout();
+        throw new Error('Session expired');
+      }
+      token = newToken; // Use the refreshed token
+    }
+    
+    const headers = Object.assign({ 'Authorization': 'Bearer ' + token }, options.headers || {});
+    const res = await fetch(url, Object.assign({}, options, { headers }));
+    
+    if (res.status === 401) {
+      const newToken = await refreshAccessToken();
+      if (newToken && !isTokenExpired(newToken)) {
+        const retryHeaders = Object.assign({ 'Authorization': 'Bearer ' + newToken }, options.headers || {});
+        return fetch(url, Object.assign({}, options, { headers: retryHeaders }));
+      } else {
+        // Refresh failed or new token is also expired
+        handleSessionTimeout();
+        throw new Error('Session expired');
+      }
+    }
+    
+    return res;
+  }
+
+  function parseJwtRole(token) {
+    try {
+      let payload = token.split('.')[1];
+      // Handle base64url decoding (JWT uses base64url, not base64)
+      // Replace base64url characters
+      payload = payload.replace(/-/g, '+').replace(/_/g, '/');
+      // Add padding if needed
+      while (payload.length % 4) {
+        payload += '=';
+      }
+      const decoded = JSON.parse(atob(payload));
+      return { role: decoded.role, email: decoded.email, user_id: decoded.user_id };
+    } catch { return {}; }
+  }
+
+  // Check if JWT token is expired
+  function isTokenExpired(token) {
+    if (!token) return true;
+    try {
+      let payload = token.split('.')[1];
+      payload = payload.replace(/-/g, '+').replace(/_/g, '/');
+      while (payload.length % 4) {
+        payload += '=';
+      }
+      const decoded = JSON.parse(atob(payload));
+      if (decoded.exp) {
+        const expDate = new Date(decoded.exp * 1000);
+        return expDate < new Date();
+      }
+      return false;
+    } catch {
+      return true;
+    }
+  }
+
+  // Show session timeout message and redirect
+  function handleSessionTimeout() {
+    // Clear all auth data
+    localStorage.removeItem('access_token');
+    localStorage.removeItem('refresh_token');
+    localStorage.removeItem('user_data');
+    localStorage.removeItem('aiProjectControlTowerAuth_v2');
+    
+    // Show timeout message
+    const root = document.getElementById('root');
+    root.innerHTML = `
+      <div class="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-50 to-slate-100">
+        <div class="text-center p-8 bg-white rounded-2xl shadow-xl border border-slate-200 max-w-md">
+          <div class="mb-6">
+            <div class="mx-auto w-16 h-16 bg-gradient-to-br from-amber-400 to-orange-500 rounded-full flex items-center justify-center mb-4">
+              <svg class="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+              </svg>
+            </div>
+            <h2 class="text-2xl font-bold text-slate-800 mb-2">Session Timed Out</h2>
+            <p class="text-slate-600 mb-4">Your session has expired for security reasons.</p>
+            <p class="text-sm text-slate-500 mb-6">Redirecting to login...</p>
+            <div class="flex justify-center">
+              <div class="animate-spin h-8 w-8 border-4 border-slate-200 border-t-indigo-600 rounded-full"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+    
+    // Redirect after 2 seconds
+    setTimeout(() => {
+      window.location.href = '/';
+    }, 2000);
+  }
+
+  const LoadingSpinner = ({ message }) => React.createElement('div', { className: 'min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-50 to-slate-100' },
+    React.createElement('div', { className: 'text-center' },
+      React.createElement('div', { className: 'relative' },
+        React.createElement('div', { className: 'animate-spin h-12 w-12 border-4 border-slate-200 border-t-indigo-600 rounded-full mx-auto mb-4' }),
+        React.createElement('div', { className: 'absolute inset-0 flex items-center justify-center' },
+          React.createElement('div', { className: 'h-6 w-6 bg-indigo-600 rounded-full animate-pulse' })
+        )
+      ),
+      React.createElement('p', { className: 'text-slate-700 font-medium' }, message || 'Loading...')
+    )
+  );
+
+  const NotificationToast = ({ message, type = 'info', onDismiss }) => {
+    const colors = {
+      success: 'bg-gradient-to-r from-green-500 to-emerald-600',
+      error: 'bg-gradient-to-r from-red-500 to-rose-600',
+      info: 'bg-gradient-to-r from-blue-500 to-indigo-600'
+    };
+    const color = colors[type] || colors.info;
+    useEffect(() => { const t = setTimeout(() => onDismiss && onDismiss(), 4000); return () => clearTimeout(t); }, [onDismiss]);
+    return React.createElement('div', { className: `fixed bottom-6 right-6 text-white px-6 py-4 rounded-xl ${color} shadow-2xl flex items-center gap-3 z-50 animate-slide-in` },
+      React.createElement('span', { className: 'font-medium' }, message),
+      React.createElement('button', { onClick: onDismiss, className: 'ml-2 hover:opacity-80' }, '×')
+    );
+  };
+
+  const formatCurrency = (n) => `₹${Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
+  const formatDate = (d) => d ? new Date(d).toLocaleDateString() : '';
+
+  // SVG Icon Component
+  const SVGIcon = ({ size = 18, className = "", children }) => (React.createElement("svg", { className, xmlns: "http://www.w3.org/2000/svg", width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round" }, children));
+  
+  // Icons
+  const LogOutIcon = (props) => React.createElement(SVGIcon, props, React.createElement("path", { d: "M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" }), React.createElement("polyline", { points: "16 17 21 12 16 7" }), React.createElement("line", { x1: "21", y1: "12", x2: "9", y2: "12" }));
+  const BuildingIcon = (props) => React.createElement(SVGIcon, props, React.createElement("path", { d: "M6 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18Z" }), React.createElement("path", { d: "M6 12h4" }), React.createElement("path", { d: "M6 16h4" }), React.createElement("path", { d: "M6 8h4" }), React.createElement("path", { d: "M14 12h4" }), React.createElement("path", { d: "M14 16h4" }), React.createElement("path", { d: "M14 8h4" }));
+  const UsersIcon = (props) => React.createElement(SVGIcon, props, React.createElement("path", { d: "M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" }), React.createElement("circle", { cx: "9", cy: "7", r: "4" }), React.createElement("path", { d: "M22 21v-2a4 4 0 0 0-3-3.87" }), React.createElement("path", { d: "M16 3.13a4 4 0 0 1 0 7.75" }));
+  const DollarSignIcon = (props) => React.createElement(SVGIcon, props, React.createElement("line", { x1: "12", x2: "12", y1: "2", y2: "22" }), React.createElement("path", { d: "M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" }));
+  const TrendingUpIcon = (props) => React.createElement(SVGIcon, props, React.createElement("polyline", { points: "22 7 13.5 15.5 8.5 10.5 2 17" }), React.createElement("polyline", { points: "16 7 22 7 22 13" }));
+  const FileTextIcon = (props) => React.createElement(SVGIcon, props, React.createElement("path", { d: "M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z" }), React.createElement("path", { d: "M14 2v6h6" }), React.createElement("path", { d: "M16 13H8" }), React.createElement("path", { d: "M16 17H8" }), React.createElement("path", { d: "M10 9H8" }));
+
+  const StatusBadge = ({ status }) => {
+    const map = { 
+      active: 'bg-gradient-to-r from-green-100 to-emerald-100 text-green-800 border border-green-200', 
+      trial: 'bg-gradient-to-r from-blue-100 to-indigo-100 text-blue-800 border border-blue-200', 
+      paused: 'bg-gradient-to-r from-yellow-100 to-amber-100 text-yellow-800 border border-yellow-200', 
+      cancelled: 'bg-gradient-to-r from-red-100 to-rose-100 text-red-800 border border-red-200', 
+      halted: 'bg-gradient-to-r from-red-100 to-rose-100 text-red-800 border border-red-200', 
+      deleted: 'bg-gradient-to-r from-slate-100 to-slate-200 text-slate-700 border border-slate-300', 
+      suspended: 'bg-gradient-to-r from-yellow-100 to-amber-100 text-yellow-800 border border-yellow-200', 
+      approved: 'bg-gradient-to-r from-green-100 to-emerald-100 text-green-800 border border-green-200', 
+      pending: 'bg-gradient-to-r from-yellow-100 to-amber-100 text-yellow-800 border border-yellow-200', 
+      failed: 'bg-gradient-to-r from-red-100 to-rose-100 text-red-800 border border-red-200' 
+    };
+    const cls = map[status] || 'bg-gradient-to-r from-slate-100 to-slate-200 text-slate-700 border border-slate-300';
+    return React.createElement('span', { className: `px-3 py-1 text-xs font-semibold rounded-full ${cls} shadow-sm` }, status);
+  };
+
+  const Pagination = ({ page, totalPages, limit, totalCount, onPageChange, onLimitChange }) => {
+    const start = (page - 1) * limit + 1;
+    const end = Math.min(page * limit, totalCount || 0);
+    return React.createElement('div', { className: 'flex flex-col sm:flex-row items-center justify-between gap-4 mt-6 p-4 bg-slate-50 rounded-xl border border-slate-200' },
+      React.createElement('div', { className: 'text-sm text-slate-600 font-medium' }, `Showing ${totalCount ? start : 0}–${end} of ${totalCount || 0}`),
+      React.createElement('div', { className: 'flex items-center gap-3' },
+        React.createElement('button', { onClick: () => onPageChange(Math.max(1, page - 1)), disabled: page <= 1, className: 'px-4 py-2 rounded-lg bg-white hover:bg-slate-100 border border-slate-300 font-medium disabled:opacity-50 disabled:cursor-not-allowed transition-all' }, 'Previous'),
+        React.createElement('div', { className: 'px-4 py-2 bg-white border border-slate-300 rounded-lg text-sm font-semibold text-slate-700' }, `Page ${page} of ${totalPages || 1}`),
+        React.createElement('button', { onClick: () => onPageChange(Math.min((totalPages || 1), page + 1)), disabled: page >= (totalPages || 1), className: 'px-4 py-2 rounded-lg bg-white hover:bg-slate-100 border border-slate-300 font-medium disabled:opacity-50 disabled:cursor-not-allowed transition-all' }, 'Next'),
+        onLimitChange && React.createElement('select', { value: limit, onChange: e => onLimitChange(parseInt(e.target.value, 10)), className: 'px-4 py-2 border border-slate-300 rounded-lg bg-white focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all' },
+          React.createElement('option', { value: 25 }, '25'),
+          React.createElement('option', { value: 50 }, '50'),
+          React.createElement('option', { value: 100 }, '100')
+        )
+      )
+    );
+  };
+
+  const Modal = ({ title, onClose, children, footer }) => (
+    React.createElement('div', { className: 'fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-fade-in' },
+      React.createElement('div', { className: 'bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-auto border border-slate-200' },
+        React.createElement('div', { className: 'p-6 border-b border-slate-200 bg-gradient-to-r from-indigo-50 to-purple-50 flex items-center justify-between' },
+          React.createElement('h3', { className: 'text-xl font-bold text-slate-800' }, title || ''),
+          React.createElement('button', { onClick: onClose, className: 'px-4 py-2 rounded-lg bg-white hover:bg-slate-100 border border-slate-300 font-medium transition-all' }, 'Close')
+        ),
+        React.createElement('div', { className: 'p-6' }, children),
+        footer && React.createElement('div', { className: 'p-6 border-t border-slate-200 bg-slate-50 flex justify-end gap-3' }, footer)
+      )
+    )
+  );
+
+  const OrganizationsTable = () => {
+    const [isLoading, setIsLoading] = useState(false);
+    const [error, setError] = useState('');
+    const [organizations, setOrganizations] = useState([]);
+    const [pagination, setPagination] = useState({ page: 1, limit: 50, total_pages: 1, total_count: 0 });
+    const [summary, setSummary] = useState(null);
+    const [filters, setFilters] = useState({ status: '', plan: '', search: '', sort_by: 'created_at', sort_order: 'desc' });
+    const [details, setDetails] = useState(null);
+    const [showDetails, setShowDetails] = useState(false);
+    const [editData, setEditData] = useState(null);
+    const [showEdit, setShowEdit] = useState(false);
+    const [deleteTarget, setDeleteTarget] = useState(null);
+    const [notification, setNotification] = useState(null);
+    const [convertTarget, setConvertTarget] = useState(null);
+    const [showConvertModal, setShowConvertModal] = useState(false);
+    const [selectedPlan, setSelectedPlan] = useState('trial');
+    const [isConverting, setIsConverting] = useState(false);
+
+    const fetchOrgs = async (page = 1, limit = pagination.limit) => {
+      setIsLoading(true); setError('');
+      try {
+        const qp = new URLSearchParams({ page, limit, ...filters });
+        const res = await makeAuthenticatedRequest(`/api/superadmin/orgs?${qp.toString()}`);
+        const data = await res.json();
+        if (data.status === 'success') {
+          setOrganizations(data.organizations || []);
+          setPagination(data.pagination || { page: 1, limit, total_pages: 1, total_count: 0 });
+          setSummary(data.summary || null);
+        } else { setError(data.message || 'Failed to fetch organizations'); }
+      } catch (e) { 
+        if (e.message === 'Session expired') {
+          // Session timeout is handled by handleSessionTimeout
+          return;
+        }
+        setError('Failed to fetch organizations'); 
+      }
+      finally { setIsLoading(false); }
+    };
+
+    useEffect(() => { fetchOrgs(1); }, []);
+
+    const openDetails = async (orgId) => {
+      try {
+        const res = await makeAuthenticatedRequest(`/api/superadmin/orgs/${orgId}`);
+        const data = await res.json();
+        if (data.status === 'success') { setDetails(data); setShowDetails(true); }
+      } catch (e) { 
+        if (e.message === 'Session expired') return;
+        setNotification({ message: 'Failed to load organization details', type: 'error' }); 
+      }
+    };
+
+    const openEdit = (org) => { setEditData({ id: org.id, name: org.name || '', domain: org.domain || '', status: org.status || '' }); setShowEdit(true); };
+
+    const saveEdit = async () => {
+      try {
+        const res = await makeAuthenticatedRequest(`/api/superadmin/orgs/${editData.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: editData.name, domain: editData.domain, status: editData.status }) });
+        const data = await res.json();
+        if (data.status === 'success') { setShowEdit(false); setNotification({ message: 'Organization updated', type: 'success' }); fetchOrgs(pagination.page); }
+        else setNotification({ message: data.message || 'Update failed', type: 'error' });
+      } catch (e) { 
+        if (e.message === 'Session expired') return;
+        setNotification({ message: 'Update failed', type: 'error' }); 
+      }
+    };
+
+    const confirmDelete = (org) => setDeleteTarget(org);
+    const doDelete = async (hard) => {
+      try {
+        const res = await makeAuthenticatedRequest(`/api/superadmin/orgs/${deleteTarget.id}?hard_delete=${hard ? 'true' : 'false'}`, { method: 'DELETE' });
+        const data = await res.json();
+        if (data.status === 'success') { setDeleteTarget(null); setNotification({ message: hard ? 'Organization deleted permanently' : 'Organization marked as deleted', type: 'success' }); fetchOrgs(1); }
+        else setNotification({ message: data.message || 'Delete failed', type: 'error' });
+      } catch (e) { 
+        if (e.message === 'Session expired') return;
+        setNotification({ message: 'Delete failed', type: 'error' }); 
+      }
+    };
+
+    const openConvertPlan = (org) => {
+      setConvertTarget(org);
+      setSelectedPlan(org.subscription?.plan_type || 'trial');
+      setShowConvertModal(true);
+    };
+
+    const doConvertPlan = async () => {
+      if (!convertTarget) return;
+      setIsConverting(true);
+      try {
+        const res = await makeAuthenticatedRequest(`/api/superadmin/orgs/${convertTarget.id}/convert-plan`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ plan_type: selectedPlan })
+        });
+        const data = await res.json();
+        if (data.status === 'success') {
+          setShowConvertModal(false);
+          setConvertTarget(null);
+          setNotification({ message: data.message || 'Plan converted successfully', type: 'success' });
+          fetchOrgs(pagination.page);
+        } else {
+          setNotification({ message: data.message || 'Plan conversion failed', type: 'error' });
+        }
+      } catch (e) {
+        if (e.message === 'Session expired') {
+          setIsConverting(false);
+          return;
+        }
+        setNotification({ message: 'Plan conversion failed', type: 'error' });
+      } finally {
+        setIsConverting(false);
+      }
+    };
+
+    return React.createElement('div', { className: 'space-y-6' },
+      notification && React.createElement(NotificationToast, { message: notification.message, type: notification.type, onDismiss: () => setNotification(null) }),
+      React.createElement('div', { className: 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4' },
+        React.createElement('div', { className: 'card-hover p-6 rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-600 shadow-lg border border-indigo-400/20' },
+          React.createElement('div', { className: 'flex items-center justify-between mb-3' },
+            React.createElement('div', { className: 'bg-white/20 backdrop-blur-sm p-3 rounded-xl' }, React.createElement(BuildingIcon, { size: 24, className: 'text-white' })),
+            React.createElement('div', { className: 'text-white/80 text-xs font-medium' }, 'Total Organizations')
+          ),
+          React.createElement('div', { className: 'text-3xl font-bold text-white' }, summary ? summary.total_orgs : '—')
+        ),
+        React.createElement('div', { className: 'card-hover p-6 rounded-2xl bg-gradient-to-br from-emerald-500 to-teal-600 shadow-lg border border-emerald-400/20' },
+          React.createElement('div', { className: 'flex items-center justify-between mb-3' },
+            React.createElement('div', { className: 'bg-white/20 backdrop-blur-sm p-3 rounded-xl' }, React.createElement(TrendingUpIcon, { size: 24, className: 'text-white' })),
+            React.createElement('div', { className: 'text-white/80 text-xs font-medium' }, 'Active Orgs')
+          ),
+          React.createElement('div', { className: 'text-3xl font-bold text-white' }, summary ? summary.active_orgs : '—')
+        ),
+        React.createElement('div', { className: 'card-hover p-6 rounded-2xl bg-gradient-to-br from-blue-500 to-cyan-600 shadow-lg border border-blue-400/20' },
+          React.createElement('div', { className: 'flex items-center justify-between mb-3' },
+            React.createElement('div', { className: 'bg-white/20 backdrop-blur-sm p-3 rounded-xl' }, React.createElement(UsersIcon, { size: 24, className: 'text-white' })),
+            React.createElement('div', { className: 'text-white/80 text-xs font-medium' }, 'Total Users')
+          ),
+          React.createElement('div', { className: 'text-3xl font-bold text-white' }, summary ? summary.total_users : '—')
+        ),
+        React.createElement('div', { className: 'card-hover p-6 rounded-2xl bg-gradient-to-br from-amber-500 to-orange-600 shadow-lg border border-amber-400/20' },
+          React.createElement('div', { className: 'flex items-center justify-between mb-3' },
+            React.createElement('div', { className: 'bg-white/20 backdrop-blur-sm p-3 rounded-xl' }, React.createElement(DollarSignIcon, { size: 24, className: 'text-white' })),
+            React.createElement('div', { className: 'text-white/80 text-xs font-medium' }, 'Total Revenue')
+          ),
+          React.createElement('div', { className: 'text-3xl font-bold text-white' }, summary ? formatCurrency(summary.total_revenue) : '—')
+        )
+      ),
+      React.createElement('div', { className: 'sticky top-0 z-10 bg-white/80 backdrop-blur-sm p-4 border border-slate-200 flex flex-wrap gap-3 items-center rounded-xl shadow-lg' },
+        React.createElement('input', { value: filters.search, onChange: e => setFilters(f => ({ ...f, search: e.target.value })), placeholder: 'Search organizations...', className: 'px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 w-full sm:w-64 transition-all' }),
+        React.createElement('select', { value: filters.status, onChange: e => setFilters(f => ({ ...f, status: e.target.value })), className: 'px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 bg-white transition-all' },
+          React.createElement('option', { value: '' }, 'All Statuses'),
+          React.createElement('option', { value: 'active' }, 'Active'),
+          React.createElement('option', { value: 'suspended' }, 'Suspended'),
+          React.createElement('option', { value: 'deleted' }, 'Deleted')
+        ),
+        React.createElement('select', { value: filters.plan, onChange: e => setFilters(f => ({ ...f, plan: e.target.value })), className: 'px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 bg-white transition-all' },
+          React.createElement('option', { value: '' }, 'All Plans'),
+          React.createElement('option', { value: 'basic' }, 'Basic'),
+          React.createElement('option', { value: 'si_plus' }, 'SI+'),
+          React.createElement('option', { value: 'pro' }, 'Pro'),
+          React.createElement('option', { value: 'trial' }, 'Trial')
+        ),
+        React.createElement('select', { value: filters.sort_by, onChange: e => setFilters(f => ({ ...f, sort_by: e.target.value })), className: 'px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 bg-white transition-all' },
+          React.createElement('option', { value: 'created_at' }, 'Created Date'),
+          React.createElement('option', { value: 'name' }, 'Name'),
+          React.createElement('option', { value: 'user_count' }, 'User Count')
+        ),
+        React.createElement('button', { onClick: () => setFilters(f => ({ ...f, sort_order: f.sort_order === 'asc' ? 'desc' : 'asc' })), className: 'px-4 py-2 rounded-lg bg-gradient-to-r from-indigo-600 to-purple-600 text-white font-medium hover:from-indigo-700 hover:to-purple-700 shadow-md btn-primary transition-all' }, 'Order: ', filters.sort_order.toUpperCase()),
+        React.createElement('button', { onClick: () => fetchOrgs(1), className: 'px-4 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 border border-slate-300 font-medium transition-all' }, 'Apply'),
+        React.createElement('button', { onClick: () => { setFilters({ status: '', plan: '', search: '', sort_by: 'created_at', sort_order: 'desc' }); fetchOrgs(1); }, className: 'px-4 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 border border-slate-300 font-medium transition-all' }, 'Clear')
+      ),
+      isLoading ? React.createElement(LoadingSpinner, { message: 'Loading organizations...' }) : (error ? React.createElement('div', { className: 'p-4 bg-red-50 border border-red-200 text-red-700 rounded-xl' }, error) :
+        React.createElement('div', { className: 'overflow-x-auto bg-white rounded-xl shadow-lg border border-slate-200' },
+          React.createElement('table', { className: 'min-w-full text-sm' },
+            React.createElement('thead', null,
+              React.createElement('tr', { className: 'bg-gradient-to-r from-indigo-50 to-purple-50' },
+                ['ID','Name','Status','Plan','Users','Projects','Sub Status','Created','Actions'].map(h => React.createElement('th', { key: h, className: 'py-4 px-4 border-b border-slate-200 text-slate-700 font-semibold' }, h))
+              )
+            ),
+            React.createElement('tbody', null,
+              (organizations || []).length === 0 ? React.createElement('tr', null, React.createElement('td', { colSpan: 9, className: 'py-8 text-center text-slate-500' }, 'No organizations found')) :
+              organizations.map((o, idx) => React.createElement('tr', { key: o.id, className: `table-row-hover ${idx % 2 === 0 ? 'bg-white' : 'bg-slate-50/50'}` },
+                React.createElement('td', { className: 'py-3 px-4 border-b border-slate-100 font-medium text-slate-700' }, o.id),
+                React.createElement('td', { className: 'py-3 px-4 border-b border-slate-100 font-medium text-slate-800' }, o.name),
+                React.createElement('td', { className: 'py-3 px-4 border-b border-slate-100' }, React.createElement(StatusBadge, { status: o.status })),
+                React.createElement('td', { className: 'py-3 px-4 border-b border-slate-100' }, (o.subscription && o.subscription.plan_type) ? React.createElement('span', { className: 'px-2 py-1 bg-indigo-100 text-indigo-700 rounded-md text-xs font-medium' }, o.subscription.plan_type) : '—'),
+                React.createElement('td', { className: 'py-3 px-4 border-b border-slate-100 text-slate-600' }, o.user_count || 0),
+                React.createElement('td', { className: 'py-3 px-4 border-b border-slate-100 text-slate-600' }, o.project_count || 0),
+                React.createElement('td', { className: 'py-3 px-4 border-b border-slate-100' }, (o.subscription && o.subscription.status) ? React.createElement(StatusBadge, { status: o.subscription.status }) : '—'),
+                React.createElement('td', { className: 'py-3 px-4 border-b border-slate-100 text-slate-600' }, o.created_at ? formatDate(o.created_at) : '—'),
+                React.createElement('td', { className: 'py-3 px-4 border-b border-slate-100' },
+                  React.createElement('div', { className: 'flex gap-2' },
+                    React.createElement('button', { onClick: () => openDetails(o.id), className: 'px-3 py-1.5 text-xs rounded-lg bg-slate-100 hover:bg-slate-200 border border-slate-300 font-medium transition-all' }, 'View'),
+                    React.createElement('button', { onClick: () => openEdit(o), className: 'px-3 py-1.5 text-xs rounded-lg bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white font-medium shadow-sm transition-all' }, 'Edit'),
+                    React.createElement('button', { onClick: () => openConvertPlan(o), className: 'px-3 py-1.5 text-xs rounded-lg bg-gradient-to-r from-purple-500 to-purple-600 hover:from-purple-600 hover:to-purple-700 text-white font-medium shadow-sm transition-all' }, 'Convert'),
+                    React.createElement('button', { onClick: () => confirmDelete(o), className: 'px-3 py-1.5 text-xs rounded-lg bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 text-white font-medium shadow-sm transition-all' }, 'Delete')
+                  )
+                )
+              ))
+            )
+          ),
+          React.createElement(Pagination, { page: pagination.page || 1, totalPages: pagination.total_pages || 1, limit: pagination.limit || 50, totalCount: pagination.total_count || 0, onPageChange: (p) => fetchOrgs(p), onLimitChange: (l) => fetchOrgs(1, l) })
+        )
+      ),
+      showDetails && details && React.createElement(Modal, { title: `Organization #${details.organization.id} - Details`, onClose: () => setShowDetails(false) },
+        React.createElement('div', { className: 'grid grid-cols-1 md:grid-cols-2 gap-4' },
+          React.createElement('div', { className: 'p-3 rounded border' },
+            React.createElement('h4', { className: 'font-semibold mb-2' }, 'Info'),
+            React.createElement('div', { className: 'text-sm text-slate-600' }, `Name: ${details.organization.name}`),
+            React.createElement('div', { className: 'text-sm text-slate-600' }, `Domain: ${details.organization.domain || '—'}`),
+            React.createElement('div', { className: 'text-sm text-slate-600' }, `Status: ${details.organization.status}`)
+          ),
+          React.createElement('div', { className: 'p-3 rounded border' },
+            React.createElement('h4', { className: 'font-semibold mb-2' }, 'Users'),
+            React.createElement('div', { className: 'text-sm text-slate-600' }, `Total: ${details.statistics.users.total}`),
+            React.createElement('div', { className: 'text-sm text-slate-600' }, `By Role: ${JSON.stringify(details.statistics.users.by_role || {})}`),
+            React.createElement('div', { className: 'text-sm text-slate-600' }, `By Status: ${JSON.stringify(details.statistics.users.by_status || {})}`)
+          ),
+          React.createElement('div', { className: 'p-3 rounded border' },
+            React.createElement('h4', { className: 'font-semibold mb-2' }, 'Subscription'),
+            React.createElement('div', { className: 'text-sm text-slate-600' }, details.subscription ? JSON.stringify(details.subscription) : '—'),
+            React.createElement('h4', { className: 'font-semibold mt-3 mb-2' }, 'History'),
+            React.createElement('div', { className: 'text-xs text-slate-600 whitespace-pre-wrap' }, JSON.stringify(details.subscription_history || [], null, 2))
+          ),
+          React.createElement('div', { className: 'p-3 rounded border' },
+            React.createElement('h4', { className: 'font-semibold mb-2' }, 'Usage'),
+            React.createElement('div', { className: 'text-xs text-slate-600 whitespace-pre-wrap' }, JSON.stringify(details.usage || {}, null, 2))
+          ),
+          React.createElement('div', { className: 'p-3 rounded border md:col-span-2' },
+            React.createElement('h4', { className: 'font-semibold mb-2' }, 'Billing'),
+            React.createElement('div', { className: 'text-xs text-slate-600 whitespace-pre-wrap' }, JSON.stringify(details.statistics.billing || {}, null, 2))
+          )
+        )
+      ),
+      showEdit && editData && React.createElement(Modal, { title: `Edit Organization #${editData.id}`, onClose: () => setShowEdit(false), footer: [
+        React.createElement('button', { key: 'cancel', onClick: () => setShowEdit(false), className: 'px-3 py-2 rounded bg-slate-100 border' }, 'Cancel'),
+        React.createElement('button', { key: 'save', onClick: saveEdit, className: 'px-3 py-2 rounded bg-blue-600 text-white' }, 'Save')
+      ] },
+        React.createElement('div', { className: 'grid grid-cols-1 sm:grid-cols-2 gap-3' },
+          React.createElement('div', null, React.createElement('label', { className: 'block text-xs text-slate-600 mb-1' }, 'Name'), React.createElement('input', { value: editData.name, onChange: e => setEditData(d => ({ ...d, name: e.target.value })), className: 'p-2 border rounded w-full' })),
+          React.createElement('div', null, React.createElement('label', { className: 'block text-xs text-slate-600 mb-1' }, 'Domain'), React.createElement('input', { value: editData.domain, onChange: e => setEditData(d => ({ ...d, domain: e.target.value })), className: 'p-2 border rounded w-full' })),
+          React.createElement('div', null, React.createElement('label', { className: 'block text-xs text-slate-600 mb-1' }, 'Status'), React.createElement('select', { value: editData.status, onChange: e => setEditData(d => ({ ...d, status: e.target.value })), className: 'p-2 border rounded w-full' },
+            React.createElement('option', { value: 'active' }, 'Active'),
+            React.createElement('option', { value: 'suspended' }, 'Suspended'),
+            React.createElement('option', { value: 'deleted' }, 'Deleted')
+          ))
+        )
+      ),
+      deleteTarget && React.createElement(Modal, { title: `Delete Organization #${deleteTarget.id}`, onClose: () => setDeleteTarget(null), footer: [
+        React.createElement('button', { key: 'cancel', onClick: () => setDeleteTarget(null), className: 'px-3 py-2 rounded bg-slate-100 border' }, 'Cancel'),
+        React.createElement('button', { key: 'soft', onClick: () => doDelete(false), className: 'px-3 py-2 rounded bg-yellow-600 text-white' }, 'Soft Delete'),
+        React.createElement('button', { key: 'hard', onClick: () => doDelete(true), className: 'px-3 py-2 rounded bg-red-600 text-white' }, 'Hard Delete')
+      ] },
+        React.createElement('p', { className: 'text-sm text-slate-700' }, 'Are you sure you want to delete this organization? Soft delete marks it as deleted. Hard delete permanently removes data.')
+      ),
+      showConvertModal && convertTarget && React.createElement(Modal, {
+        title: `Convert Plan for ${convertTarget.name}`,
+        onClose: () => { if (!isConverting) { setShowConvertModal(false); setConvertTarget(null); } },
+        footer: [
+          React.createElement('button', {
+            key: 'cancel',
+            onClick: () => { setShowConvertModal(false); setConvertTarget(null); },
+            className: 'px-3 py-2 rounded bg-slate-100 border',
+            disabled: isConverting
+          }, 'Cancel'),
+          React.createElement('button', {
+            key: 'convert',
+            onClick: doConvertPlan,
+            className: 'px-3 py-2 rounded bg-purple-600 text-white',
+            disabled: isConverting
+          }, isConverting ? 'Converting...' : 'Convert Plan')
+        ]
+      },
+        React.createElement('div', { className: 'space-y-4' },
+          React.createElement('div', null,
+            React.createElement('label', { className: 'block text-xs text-slate-600 mb-1' }, 'Current Plan'),
+            React.createElement('div', { className: 'p-2 border rounded bg-slate-50' },
+              React.createElement('span', { className: 'font-semibold' }, (convertTarget.subscription?.plan_type || 'trial').toUpperCase())
+            )
+          ),
+          React.createElement('div', null,
+            React.createElement('label', { className: 'block text-xs text-slate-600 mb-1' }, 'Select New Plan'),
+            React.createElement('select', {
+              value: selectedPlan,
+              onChange: e => setSelectedPlan(e.target.value),
+              className: 'p-2 border rounded w-full',
+              disabled: isConverting,
+              'aria-label': 'Select new subscription plan'
+            },
+              React.createElement('option', { value: 'trial' }, 'Trial'),
+              React.createElement('option', { value: 'basic' }, 'Basic - ₹9/user/month - 1 project, 2 users'),
+              React.createElement('option', { value: 'si_plus' }, 'SI+ - ₹18/user/month - 10 projects, 10 users'),
+              React.createElement('option', { value: 'pro' }, 'Pro - ₹35/user/month - Unlimited')
+            )
+          ),
+          convertTarget.subscription && (convertTarget.subscription.plan_type === 'trial' || ['basic', 'si_plus', 'pro'].includes(convertTarget.subscription.plan_type)) && selectedPlan !== convertTarget.subscription.plan_type &&
+          React.createElement('div', { className: `p-3 rounded ${selectedPlan === 'trial' ? 'bg-yellow-50 border border-yellow-200' : 'bg-blue-50 border border-blue-200'}` },
+            React.createElement('p', { className: 'text-sm text-slate-700' },
+              selectedPlan === 'trial' ? 'Warning: This will downgrade the organization to trial status. Ensure this is intentional.' :
+              'This is a manual conversion. No payment will be processed.'
+            )
+          ),
+          !convertTarget.subscription && selectedPlan !== 'trial' &&
+          React.createElement('div', { className: 'p-3 rounded bg-blue-50 border border-blue-200' },
+            React.createElement('p', { className: 'text-sm text-slate-700' }, 'A new subscription will be created. This is a manual conversion. No payment will be processed.')
+          )
+        )
+      )
+    );
+  };
+
+  const UsersTable = () => {
+    const [isLoading, setIsLoading] = useState(false);
+    const [error, setError] = useState('');
+    const [users, setUsers] = useState([]);
+    const [pagination, setPagination] = useState({ page: 1, limit: 50, total_pages: 1, total_count: 0 });
+    const [summary, setSummary] = useState(null);
+    const [filters, setFilters] = useState({ org_id: '', role: '', status: '', search: '', sort_by: 'created_at', sort_order: 'desc' });
+    const [orgOptions, setOrgOptions] = useState([]);
+    const [detailUser, setDetailUser] = useState(null);
+    const [showUserDetails, setShowUserDetails] = useState(false);
+    const [editUser, setEditUser] = useState(null);
+
+    const fetchOrgOptions = async () => {
+      try {
+        const res = await makeAuthenticatedRequest('/api/superadmin/orgs?page=1&limit=100');
+        const data = await res.json();
+        if (data.status === 'success') setOrgOptions((data.organizations || []).map(o => ({ id: o.id, name: o.name })));
+      } catch {}
+    };
+
+    const fetchUsers = async (page = 1, limit = pagination.limit) => {
+      setIsLoading(true); setError('');
+      try {
+        const qp = new URLSearchParams({ page, limit, ...filters });
+        const res = await makeAuthenticatedRequest(`/api/superadmin/users?${qp.toString()}`);
+        const data = await res.json();
+        if (data.status === 'success') {
+          setUsers(data.users || []);
+          setPagination(data.pagination || { page: 1, limit, total_pages: 1, total_count: 0 });
+          setSummary(data.summary || null);
+        } else { setError(data.message || 'Failed to fetch users'); }
+      } catch (e) { setError('Failed to fetch users'); }
+      finally { setIsLoading(false); }
+    };
+
+    useEffect(() => { fetchUsers(1); fetchOrgOptions(); }, []);
+
+    const openUserDetails = async (userId) => {
+      try {
+        const res = await makeAuthenticatedRequest(`/api/superadmin/users/${userId}`);
+        const data = await res.json();
+        if (data.status === 'success') { setDetailUser(data); setShowUserDetails(true); }
+      } catch { setError('Failed to load user details'); }
+    };
+
+    const saveUserEdit = async () => {
+      try {
+        const payload = { email: editUser.email, role: editUser.role, status: editUser.status, org_id: editUser.org_id };
+        if (editUser.password) payload.password = editUser.password;
+        const res = await makeAuthenticatedRequest(`/api/superadmin/users/${editUser.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+        const data = await res.json();
+        if (data.status === 'success') { setEditUser(null); fetchUsers(pagination.page); }
+      } catch { setError('Failed to update user'); }
+    };
+
+    const approveUser = async (userId) => {
+      try {
+        const res = await makeAuthenticatedRequest(`/api/superadmin/users/${userId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: 'approved' }) });
+        const data = await res.json();
+        if (data.status === 'success') fetchUsers(pagination.page);
+      } catch {}
+    };
+    const rejectUser = async (userId) => {
+      try {
+        const res = await makeAuthenticatedRequest(`/api/superadmin/users/${userId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: 'rejected' }) });
+        const data = await res.json();
+        if (data.status === 'success') fetchUsers(pagination.page);
+      } catch {}
+    };
+
+    return React.createElement('div', { className: 'space-y-4' },
+      React.createElement('div', { className: 'sticky top-0 z-10 bg-white p-3 border-b flex flex-wrap gap-2 items-center rounded-lg shadow' },
+        React.createElement('input', { value: filters.search, onChange: e => setFilters(f => ({ ...f, search: e.target.value })), placeholder: 'Search by email...', className: 'p-2 border rounded w-full sm:w-64' }),
+        React.createElement('select', { value: filters.org_id, onChange: e => setFilters(f => ({ ...f, org_id: e.target.value })), className: 'p-2 border rounded' },
+          React.createElement('option', { value: '' }, 'All Orgs'),
+          orgOptions.map(o => React.createElement('option', { key: o.id, value: o.id }, `${o.id} - ${o.name}`))
+        ),
+        React.createElement('select', { value: filters.role, onChange: e => setFilters(f => ({ ...f, role: e.target.value })), className: 'p-2 border rounded' },
+          React.createElement('option', { value: '' }, 'All Roles'),
+          React.createElement('option', { value: 'super_admin' }, 'SuperAdmin'),
+          React.createElement('option', { value: 'org_admin' }, 'Org Admin'),
+          React.createElement('option', { value: 'org_user' }, 'Org User')
+        ),
+        React.createElement('select', { value: filters.status, onChange: e => setFilters(f => ({ ...f, status: e.target.value })), className: 'p-2 border rounded' },
+          React.createElement('option', { value: '' }, 'All Statuses'),
+          React.createElement('option', { value: 'approved' }, 'Approved'),
+          React.createElement('option', { value: 'pending' }, 'Pending'),
+          React.createElement('option', { value: 'suspended' }, 'Suspended'),
+          React.createElement('option', { value: 'rejected' }, 'Rejected')
+        ),
+        React.createElement('button', { onClick: () => fetchUsers(1), className: 'px-3 py-2 rounded bg-slate-900 text-white' }, 'Apply')
+      ),
+      summary && summary.pending_approvals > 0 && React.createElement('div', { className: 'p-3 bg-yellow-50 border border-yellow-200 rounded' }, `${summary.pending_approvals} pending approvals`),
+      isLoading ? React.createElement(LoadingSpinner, { message: 'Loading users...' }) : (error ? React.createElement('div', { className: 'p-3 bg-red-100 text-red-700 rounded' }, error) :
+        React.createElement('div', { className: 'overflow-x-auto bg-white rounded-xl shadow border border-slate-200' },
+          React.createElement('table', { className: 'min-w-full text-sm' },
+            React.createElement('thead', null,
+              React.createElement('tr', { className: 'text-left text-slate-600' },
+                ['ID','Email','Role','Org','Status','Verified','Created','Actions'].map(h => React.createElement('th', { key: h, className: 'py-2 px-3 border-b bg-slate-50' }, h))
+              )
+            ),
+            React.createElement('tbody', null,
+              (users || []).length === 0 ? React.createElement('tr', null, React.createElement('td', { colSpan: 8, className: 'py-6 text-center text-slate-500' }, 'No users found')) :
+              users.map(u => React.createElement('tr', { key: u.id, className: 'hover:bg-slate-50' },
+                React.createElement('td', { className: 'py-2 px-3 border-b' }, u.id),
+                React.createElement('td', { className: 'py-2 px-3 border-b' }, u.email),
+                React.createElement('td', { className: 'py-2 px-3 border-b' }, u.role),
+                React.createElement('td', { className: 'py-2 px-3 border-b' }, u.org_name || 'Platform'),
+                React.createElement('td', { className: 'py-2 px-3 border-b' }, React.createElement(StatusBadge, { status: u.status })),
+                React.createElement('td', { className: 'py-2 px-3 border-b' }, u.is_email_verified ? '✓' : '—'),
+                React.createElement('td', { className: 'py-2 px-3 border-b' }, u.created_at ? formatDate(u.created_at) : '—'),
+                React.createElement('td', { className: 'py-2 px-3 border-b' },
+                  React.createElement('div', { className: 'flex gap-2' },
+                    React.createElement('button', { onClick: () => openUserDetails(u.id), className: 'px-2 py-1 text-xs rounded bg-slate-100 border' }, 'View'),
+                    React.createElement('button', { onClick: () => setEditUser({ ...u, password: '' }), className: 'px-2 py-1 text-xs rounded bg-blue-600 text-white' }, 'Edit'),
+                    u.status === 'pending' && React.createElement('button', { onClick: () => approveUser(u.id), className: 'px-2 py-1 text-xs rounded bg-green-600 text-white' }, 'Approve'),
+                    u.status === 'pending' && React.createElement('button', { onClick: () => rejectUser(u.id), className: 'px-2 py-1 text-xs rounded bg-yellow-600 text-white' }, 'Reject'),
+                    React.createElement('button', { onClick: async () => { await makeAuthenticatedRequest(`/api/superadmin/users/${u.id}`, { method: 'DELETE' }); fetchUsers(1); }, className: 'px-2 py-1 text-xs rounded bg-red-600 text-white' }, 'Delete')
+                  )
+                )
+              ))
+            )
+          ),
+          React.createElement(Pagination, { page: pagination.page || 1, totalPages: pagination.total_pages || 1, limit: pagination.limit || 50, totalCount: pagination.total_count || 0, onPageChange: (p) => fetchUsers(p), onLimitChange: (l) => fetchUsers(1, l) })
+        )
+      ),
+      showUserDetails && detailUser && React.createElement(Modal, { title: `User #${detailUser.user.id}`, onClose: () => setShowUserDetails(false) },
+        React.createElement('div', { className: 'grid grid-cols-1 sm:grid-cols-2 gap-3' },
+          React.createElement('div', { className: 'p-3 rounded border' }, React.createElement('h4', { className: 'font-semibold mb-2' }, 'Info'), React.createElement('div', { className: 'text-xs whitespace-pre-wrap' }, JSON.stringify(detailUser.user, null, 2))),
+          React.createElement('div', { className: 'p-3 rounded border' }, React.createElement('h4', { className: 'font-semibold mb-2' }, 'Recent Audit'), React.createElement('div', { className: 'text-xs whitespace-pre-wrap' }, JSON.stringify(detailUser.recent_audit || [], null, 2)))
+        )
+      ),
+      editUser && React.createElement(Modal, { title: `Edit User #${editUser.id}`, onClose: () => setEditUser(null), footer: [
+        React.createElement('button', { key: 'cancel', onClick: () => setEditUser(null), className: 'px-3 py-2 rounded bg-slate-100 border' }, 'Cancel'),
+        React.createElement('button', { key: 'save', onClick: saveUserEdit, className: 'px-3 py-2 rounded bg-blue-600 text-white' }, 'Save')
+      ] },
+        React.createElement('div', { className: 'grid grid-cols-1 sm:grid-cols-2 gap-3' },
+          React.createElement('div', null, React.createElement('label', { className: 'block text-xs text-slate-600 mb-1' }, 'Email'), React.createElement('input', { value: editUser.email, onChange: e => setEditUser(d => ({ ...d, email: e.target.value })), className: 'p-2 border rounded w-full' })),
+          React.createElement('div', null, React.createElement('label', { className: 'block text-xs text-slate-600 mb-1' }, 'Password'), React.createElement('input', { value: editUser.password, onChange: e => setEditUser(d => ({ ...d, password: e.target.value })), className: 'p-2 border rounded w-full', type: 'password', placeholder: 'Optional' })),
+          React.createElement('div', null, React.createElement('label', { className: 'block text-xs text-slate-600 mb-1' }, 'Role'), React.createElement('select', { value: editUser.role, onChange: e => setEditUser(d => ({ ...d, role: e.target.value })), className: 'p-2 border rounded w-full' },
+            React.createElement('option', { value: 'super_admin' }, 'SuperAdmin'),
+            React.createElement('option', { value: 'org_admin' }, 'Org Admin'),
+            React.createElement('option', { value: 'org_user' }, 'Org User')
+          )),
+          React.createElement('div', null, React.createElement('label', { className: 'block text-xs text-slate-600 mb-1' }, 'Status'), React.createElement('select', { value: editUser.status, onChange: e => setEditUser(d => ({ ...d, status: e.target.value })), className: 'p-2 border rounded w-full' },
+            React.createElement('option', { value: 'approved' }, 'Approved'),
+            React.createElement('option', { value: 'pending' }, 'Pending'),
+            React.createElement('option', { value: 'suspended' }, 'Suspended'),
+            React.createElement('option', { value: 'rejected' }, 'Rejected')
+          )),
+          React.createElement('div', null, React.createElement('label', { className: 'block text-xs text-slate-600 mb-1' }, 'Organization'), React.createElement('select', { value: editUser.org_id || '', onChange: e => setEditUser(d => ({ ...d, org_id: e.target.value })), className: 'p-2 border rounded w-full' },
+            React.createElement('option', { value: '' }, 'Platform'),
+            orgOptions.map(o => React.createElement('option', { key: o.id, value: o.id }, `${o.id} - ${o.name}`))
+          ))
+        )
+      )
+    );
+  };
+
+  const SubscriptionsTable = () => {
+    const [isLoading, setIsLoading] = useState(false);
+    const [error, setError] = useState('');
+    const [subs, setSubs] = useState([]);
+    const [pagination, setPagination] = useState({ page: 1, limit: 50, total_pages: 1, total_count: 0 });
+    const [summary, setSummary] = useState(null);
+    const [filters, setFilters] = useState({ status: '', plan_type: '', org_id: '', sort_by: 'created_at', sort_order: 'desc' });
+    const [detailSub, setDetailSub] = useState(null);
+    const [showSubDetails, setShowSubDetails] = useState(false);
+    const [billingOrgId, setBillingOrgId] = useState(null);
+    const [billingData, setBillingData] = useState(null);
+
+    const fetchSubs = async (page = 1, limit = pagination.limit) => {
+      setIsLoading(true); setError('');
+      try {
+        const qp = new URLSearchParams({ page, limit, ...filters });
+        const res = await makeAuthenticatedRequest(`/api/superadmin/subscriptions?${qp.toString()}`);
+        const data = await res.json();
+        if (data.status === 'success') {
+          setSubs(data.subscriptions || []);
+          setPagination(data.pagination || { page: 1, limit, total_pages: 1, total_count: 0 });
+          setSummary(data.summary || null);
+        } else { setError(data.message || 'Failed to fetch subscriptions'); }
+      } catch (e) { setError('Failed to fetch subscriptions'); }
+      finally { setIsLoading(false); }
+    };
+
+    useEffect(() => { fetchSubs(1); }, []);
+
+    const openBillingHistory = async (orgId) => {
+      try {
+        const res = await makeAuthenticatedRequest(`/api/org/billing/history?org_id=${orgId}&page=1&limit=25`);
+        const data = await res.json();
+        if (data.status === 'success') { setBillingOrgId(orgId); setBillingData(data); }
+      } catch {}
+    };
+
+    return React.createElement('div', { className: 'space-y-4' },
+      React.createElement('div', { className: 'sticky top-0 z-10 bg-white p-3 border-b flex flex-wrap gap-2 items-center rounded-lg shadow' },
+        React.createElement('select', { value: filters.status, onChange: e => setFilters(f => ({ ...f, status: e.target.value })), className: 'p-2 border rounded' },
+          React.createElement('option', { value: '' }, 'All Statuses'),
+          ['active','trial','paused','cancelled','halted','authenticated','created','completed','expired'].map(s => React.createElement('option', { key: s, value: s }, s))
+        ),
+        React.createElement('select', { value: filters.plan_type, onChange: e => setFilters(f => ({ ...f, plan_type: e.target.value })), className: 'p-2 border rounded' },
+          React.createElement('option', { value: '' }, 'All Plans'),
+          ['basic','si_plus','pro'].map(p => React.createElement('option', { key: p, value: p }, p))
+        ),
+        React.createElement('button', { onClick: () => fetchSubs(1), className: 'px-3 py-2 rounded bg-slate-900 text-white' }, 'Apply')
+      ),
+      isLoading ? React.createElement(LoadingSpinner, { message: 'Loading subscriptions...' }) : (error ? React.createElement('div', { className: 'p-3 bg-red-100 text-red-700 rounded' }, error) :
+        React.createElement('div', { className: 'overflow-x-auto bg-white rounded-xl shadow border border-slate-200' },
+          React.createElement('table', { className: 'min-w-full text-sm' },
+            React.createElement('thead', null,
+              React.createElement('tr', { className: 'text-left text-slate-600' },
+                ['ID','Organization','Plan','Status','Users','Start Date','Razorpay ID','Actions'].map(h => React.createElement('th', { key: h, className: 'py-2 px-3 border-b bg-slate-50' }, h))
+              )
+            ),
+            React.createElement('tbody', null,
+              (subs || []).length === 0 ? React.createElement('tr', null, React.createElement('td', { colSpan: 8, className: 'py-6 text-center text-slate-500' }, 'No subscriptions found')) :
+              subs.map(s => React.createElement('tr', { key: s.id || `${s.org_id}_${s.plan_type}_${s.created_at}` },
+                React.createElement('td', { className: 'py-2 px-3 border-b' }, s.id || '—'),
+                React.createElement('td', { className: 'py-2 px-3 border-b' }, s.org_name || s.org_id),
+                React.createElement('td', { className: 'py-2 px-3 border-b' }, s.plan_type),
+                React.createElement('td', { className: 'py-2 px-3 border-b' }, React.createElement(StatusBadge, { status: s.status })),
+                React.createElement('td', { className: 'py-2 px-3 border-b' }, s.user_count || 0),
+                React.createElement('td', { className: 'py-2 px-3 border-b' }, s.start_date ? formatDate(s.start_date) : '—'),
+                React.createElement('td', { className: 'py-2 px-3 border-b' }, s.razorpay_subscription_id || '—'),
+                React.createElement('td', { className: 'py-2 px-3 border-b' },
+                  React.createElement('div', { className: 'flex gap-2' },
+                    React.createElement('button', { onClick: () => { setDetailSub(s); setShowSubDetails(true); }, className: 'px-2 py-1 text-xs rounded bg-slate-100 border' }, 'Details'),
+                    React.createElement('button', { onClick: () => openBillingHistory(s.org_id), className: 'px-2 py-1 text-xs rounded bg-blue-600 text-white' }, 'Billing History')
+                  )
+                )
+              ))
+            )
+          ),
+          React.createElement(Pagination, { page: pagination.page || 1, totalPages: pagination.total_pages || 1, limit: pagination.limit || 50, totalCount: pagination.total_count || 0, onPageChange: (p) => fetchSubs(p), onLimitChange: (l) => fetchSubs(1, l) })
+        )
+      ),
+      showSubDetails && detailSub && React.createElement(Modal, { title: `Subscription Details`, onClose: () => setShowSubDetails(false) },
+        React.createElement('div', { className: 'text-xs whitespace-pre-wrap' }, JSON.stringify(detailSub, null, 2))
+      ),
+      billingOrgId && billingData && React.createElement(Modal, { title: `Billing History - Org ${billingOrgId}`, onClose: () => { setBillingOrgId(null); setBillingData(null); } },
+        React.createElement('div', { className: 'overflow-x-auto' },
+          React.createElement('table', { className: 'min-w-full text-sm' },
+            React.createElement('thead', null,
+              React.createElement('tr', { className: 'text-left text-slate-600' }, ['Date','Transaction ID','Amount','Status','Invoice'].map(h => React.createElement('th', { key: h, className: 'py-2 px-3 border-b bg-slate-50' }, h)))
+            ),
+            React.createElement('tbody', null,
+              (billingData.transactions || []).map(t => React.createElement('tr', { key: t.id },
+                React.createElement('td', { className: 'py-2 px-3 border-b' }, t.created_at ? formatDate(t.created_at) : '—'),
+                React.createElement('td', { className: 'py-2 px-3 border-b' }, t.razorpay_payment_id || '—'),
+                React.createElement('td', { className: 'py-2 px-3 border-b' }, formatCurrency(t.amount)),
+                React.createElement('td', { className: 'py-2 px-3 border-b' }, React.createElement(StatusBadge, { status: t.status })),
+                React.createElement('td', { className: 'py-2 px-3 border-b' }, t.invoice_available ? React.createElement('a', { className: 'text-indigo-600 underline', href: `/api/org/billing/invoice/${t.id}` }, 'Download') : '—')
+              ))
+            )
+          )
+        )
+      )
+    );
+  };
+
+  const BillingDashboard = () => {
+    const [isLoading, setIsLoading] = useState(false);
+    const [error, setError] = useState('');
+    const [data, setData] = useState(null);
+    const [dateRange, setDateRange] = useState({ start_date: '', end_date: '' });
+    const [groupBy, setGroupBy] = useState('month');
+    const lineRef = useRef(null); const doughnutRef = useRef(null);
+    const lineChart = useRef(null); const doughnutChart = useRef(null);
+
+    const fetchBilling = async () => {
+      setIsLoading(true); setError('');
+      try {
+        const qp = new URLSearchParams({ ...dateRange, group_by: groupBy });
+        const res = await makeAuthenticatedRequest(`/api/superadmin/billing?${qp.toString()}`);
+        const d = await res.json();
+        if (d.status === 'success') setData(d); else setError(d.message || 'Failed to fetch billing');
+      } catch (e) { setError('Failed to fetch billing'); }
+      finally { setIsLoading(false); }
+    };
+
+    useEffect(() => { fetchBilling(); }, []);
+    useEffect(() => { if (data && data.revenue) {
+      // Line chart
+      if (lineChart.current) { lineChart.current.destroy(); }
+      const labels = (data.revenue.over_time || []).map(x => x.period);
+      const values = (data.revenue.over_time || []).map(x => x.revenue);
+      lineChart.current = new Chart(lineRef.current.getContext('2d'), { type: 'line', data: { labels, datasets: [{ label: 'Revenue', data: values, borderColor: '#8b5cf6', backgroundColor: 'rgba(139,92,246,0.1)', fill: true }] }, options: { responsive: true, maintainAspectRatio: false } });
+      // Doughnut chart
+      if (doughnutChart.current) { doughnutChart.current.destroy(); }
+      const planKeys = Object.keys(data.revenue.by_plan || {}); const planVals = planKeys.map(k => data.revenue.by_plan[k]);
+      doughnutChart.current = new Chart(doughnutRef.current.getContext('2d'), { type: 'doughnut', data: { labels: planKeys, datasets: [{ label: 'Revenue by Plan', data: planVals, backgroundColor: ['#94a3b8','#60a5fa','#a78bfa'] }] }, options: { responsive: true, maintainAspectRatio: false } });
+    } }, [data]);
+
+    const exportToCSV = () => {
+      if (!data) return;
+      const rows = [];
+      rows.push(['Total Revenue', data.revenue.total]);
+      rows.push(['MRR', data.revenue.mrr]);
+      rows.push(['ARR', data.revenue.arr]);
+      rows.push(['Churn Rate', data.subscriptions.churn_rate]);
+      rows.push([]);
+      rows.push(['Revenue Over Time']);
+      (data.revenue.over_time || []).forEach(p => rows.push([p.period, p.revenue]));
+      rows.push([]);
+      rows.push(['Top Customers']);
+      (data.top_customers || []).forEach(c => rows.push([c.org_id, c.org_name, c.total_revenue]));
+      const csvContent = rows.map(r => r.map(c => `"${c}"`).join(',')).join('\n');
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const link = document.createElement('a'); const url = URL.createObjectURL(blob);
+      link.href = url; link.download = `billing_${dateRange.start_date || 'start'}_${dateRange.end_date || 'end'}.csv`; document.body.appendChild(link); link.click(); document.body.removeChild(link);
+    };
+
+    const applyRange = (days) => {
+      const end = new Date(); const start = new Date(); start.setDate(end.getDate() - days);
+      setDateRange({ start_date: start.toISOString().slice(0,10), end_date: end.toISOString().slice(0,10) });
+    };
+
+    return React.createElement('div', { className: 'space-y-4' },
+      React.createElement('div', { className: 'bg-white/80 backdrop-blur-sm p-4 border border-slate-200 flex flex-wrap gap-3 items-center rounded-xl shadow-lg' },
+        React.createElement('button', { onClick: () => { applyRange(7); }, className: 'px-4 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 border border-slate-300 font-medium transition-all' }, 'Last 7 Days'),
+        React.createElement('button', { onClick: () => { applyRange(30); }, className: 'px-4 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 border border-slate-300 font-medium transition-all' }, 'Last 30 Days'),
+        React.createElement('button', { onClick: () => { applyRange(90); }, className: 'px-4 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 border border-slate-300 font-medium transition-all' }, 'Last 90 Days'),
+        React.createElement('input', { type: 'date', value: dateRange.start_date, onChange: e => setDateRange(r => ({ ...r, start_date: e.target.value })), className: 'px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all' }),
+        React.createElement('input', { type: 'date', value: dateRange.end_date, onChange: e => setDateRange(r => ({ ...r, end_date: e.target.value })), className: 'px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all' }),
+        React.createElement('select', { value: groupBy, onChange: e => setGroupBy(e.target.value), className: 'px-4 py-2 border border-slate-300 rounded-lg bg-white focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all' },
+          React.createElement('option', { value: 'day' }, 'Day'),
+          React.createElement('option', { value: 'month' }, 'Month')
+        ),
+        React.createElement('button', { onClick: fetchBilling, className: 'px-4 py-2 rounded-lg bg-gradient-to-r from-indigo-600 to-purple-600 text-white font-medium hover:from-indigo-700 hover:to-purple-700 shadow-md btn-primary transition-all' }, 'Apply'),
+        React.createElement('button', { onClick: exportToCSV, className: 'px-4 py-2 rounded-lg bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 text-white font-medium shadow-md btn-primary transition-all' }, 'Export CSV')
+      ),
+      isLoading ? React.createElement(LoadingSpinner, { message: 'Loading billing...' }) : (error ? React.createElement('div', { className: 'p-3 bg-red-100 text-red-700 rounded' }, error) :
+        data ? React.createElement('div', null,
+          React.createElement('div', { className: 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4' },
+            React.createElement('div', { className: 'card-hover p-6 rounded-2xl bg-gradient-to-br from-amber-500 to-orange-600 shadow-lg border border-amber-400/20' },
+              React.createElement('div', { className: 'flex items-center justify-between mb-3' },
+                React.createElement('div', { className: 'bg-white/20 backdrop-blur-sm p-3 rounded-xl' }, React.createElement(DollarSignIcon, { size: 24, className: 'text-white' })),
+                React.createElement('div', { className: 'text-white/80 text-xs font-medium' }, 'Total Revenue')
+              ),
+              React.createElement('div', { className: 'text-3xl font-bold text-white' }, formatCurrency(data.revenue.total))
+            ),
+            React.createElement('div', { className: 'card-hover p-6 rounded-2xl bg-gradient-to-br from-blue-500 to-cyan-600 shadow-lg border border-blue-400/20' },
+              React.createElement('div', { className: 'flex items-center justify-between mb-3' },
+                React.createElement('div', { className: 'bg-white/20 backdrop-blur-sm p-3 rounded-xl' }, React.createElement(TrendingUpIcon, { size: 24, className: 'text-white' })),
+                React.createElement('div', { className: 'text-white/80 text-xs font-medium' }, 'MRR')
+              ),
+              React.createElement('div', { className: 'text-3xl font-bold text-white' }, formatCurrency(data.revenue.mrr))
+            ),
+            React.createElement('div', { className: 'card-hover p-6 rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-600 shadow-lg border border-indigo-400/20' },
+              React.createElement('div', { className: 'flex items-center justify-between mb-3' },
+                React.createElement('div', { className: 'bg-white/20 backdrop-blur-sm p-3 rounded-xl' }, React.createElement(DollarSignIcon, { size: 24, className: 'text-white' })),
+                React.createElement('div', { className: 'text-white/80 text-xs font-medium' }, 'ARR')
+              ),
+              React.createElement('div', { className: 'text-3xl font-bold text-white' }, formatCurrency(data.revenue.arr))
+            ),
+            React.createElement('div', { className: 'card-hover p-6 rounded-2xl bg-gradient-to-br from-red-500 to-rose-600 shadow-lg border border-red-400/20' },
+              React.createElement('div', { className: 'flex items-center justify-between mb-3' },
+                React.createElement('div', { className: 'bg-white/20 backdrop-blur-sm p-3 rounded-xl' }, React.createElement(TrendingUpIcon, { size: 24, className: 'text-white' })),
+                React.createElement('div', { className: 'text-white/80 text-xs font-medium' }, 'Churn Rate')
+              ),
+              React.createElement('div', { className: 'text-3xl font-bold text-white' }, `${data.subscriptions.churn_rate}%`)
+            )
+          ),
+          React.createElement('div', { className: 'grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6' },
+            React.createElement('div', { className: 'p-6 rounded-2xl shadow-lg bg-white border border-slate-200' }, React.createElement('h4', { className: 'text-lg font-bold text-slate-800 mb-4' }, 'Revenue Over Time'), React.createElement('div', { className: 'chart-container' }, React.createElement('canvas', { ref: lineRef }))),
+            React.createElement('div', { className: 'p-6 rounded-2xl shadow-lg bg-white border border-slate-200' }, React.createElement('h4', { className: 'text-lg font-bold text-slate-800 mb-4' }, 'Revenue by Plan'), React.createElement('div', { className: 'chart-container' }, React.createElement('canvas', { ref: doughnutRef })))
+          )
+        ) : null
+      )
+    );
+  };
+
+  const AuditLogsViewer = () => {
+    const [isLoading, setIsLoading] = useState(false);
+    const [error, setError] = useState('');
+    const [logs, setLogs] = useState([]);
+    const [pagination, setPagination] = useState({ page: 1, limit: 100, total_pages: 1, total_count: 0 });
+    const [filters, setFilters] = useState({ org_id: '', user_id: '', user_email: '', action: '', start_date: '', end_date: '', search: '', sort_order: 'desc' });
+    const [orgOptions, setOrgOptions] = useState([]);
+    const [summary, setSummary] = useState(null);
+    const [detailLog, setDetailLog] = useState(null);
+
+    const fetchOrgOptions = async () => { try { const r = await makeAuthenticatedRequest('/api/superadmin/orgs?page=1&limit=100'); const d = await r.json(); if (d.status==='success') setOrgOptions((d.organizations||[]).map(o=>({id:o.id, name:o.name}))); } catch {} };
+
+    const fetchLogs = async (page = 1, limit = pagination.limit) => {
+      setIsLoading(true); setError('');
+      try {
+        const qp = new URLSearchParams({ page, limit, org_id: filters.org_id || '', user_id: filters.user_id || '', action: filters.action || '', start_date: filters.start_date || '', end_date: filters.end_date || '', search: filters.search || '', sort_order: filters.sort_order || 'desc' });
+        const res = await makeAuthenticatedRequest(`/api/superadmin/audit-logs?${qp.toString()}`);
+        const data = await res.json();
+        if (data.status === 'success') {
+          setLogs(data.logs || []);
+          setPagination(data.pagination || { page: 1, limit, total_pages: 1, total_count: 0 });
+          setSummary(data.summary || null);
+        } else { setError(data.message || 'Failed to fetch audit logs'); }
+      } catch (e) { setError('Failed to fetch audit logs'); }
+      finally { setIsLoading(false); }
+    };
+
+    useEffect(() => { fetchLogs(1); fetchOrgOptions(); }, []);
+
+    const exportToCSV = () => {
+      const headers = ['Timestamp','Organization','User','Action','Details'];
+      const rows = (logs || []).map(log => [log.timestamp, log.org_name || 'N/A', log.user_email || 'System', log.action, JSON.stringify(log.details)]);
+      const csvContent = [headers, ...rows].map(row => row.map(cell => `"${String(cell).replaceAll('"','""')}"`).join(',')).join('\n');
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const link = document.createElement('a');
+      const url = URL.createObjectURL(blob);
+      link.setAttribute('href', url);
+      link.setAttribute('download', `audit_logs_${new Date().toISOString().split('T')[0]}.csv`);
+      link.style.visibility = 'hidden';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    };
+
+    async function applyFilters() {
+      // If user_email is provided, resolve to user_id via users endpoint (limit 1)
+      try {
+        if (filters.user_email && !filters.user_id) {
+          const qp = new URLSearchParams({ page: 1, limit: 1, search: filters.user_email });
+          const r = await makeAuthenticatedRequest(`/api/superadmin/users?${qp.toString()}`);
+          const d = await r.json();
+          if (d.status === 'success' && Array.isArray(d.users) && d.users.length > 0) {
+            setFilters(prev => ({ ...prev, user_id: d.users[0].id }));
+            await fetchLogs(1);
+            return;
+          } else {
+            // if not found, set user_id empty and proceed (will return empty logs)
+            setFilters(prev => ({ ...prev, user_id: '' }));
+          }
+        }
+      } catch {}
+      await fetchLogs(1);
+    }
+
+    return React.createElement('div', { className: 'space-y-4' },
+      React.createElement('div', { className: 'sticky top-0 z-10 bg-white p-3 border-b flex flex-wrap gap-2 items-center rounded-lg shadow' },
+        React.createElement('input', { value: filters.search, onChange: e => setFilters(f => ({ ...f, search: e.target.value })), placeholder: 'Search details...', className: 'p-2 border rounded w-full sm:w-64' }),
+        React.createElement('select', { value: filters.org_id, onChange: e => setFilters(f => ({ ...f, org_id: e.target.value })), className: 'p-2 border rounded' },
+          React.createElement('option', { value: '' }, 'All Orgs'),
+          orgOptions.map(o => React.createElement('option', { key: o.id, value: o.id }, `${o.id} - ${o.name}`))
+        ),
+        React.createElement('input', { value: filters.user_email, onChange: e => setFilters(f => ({ ...f, user_email: e.target.value })), placeholder: 'User email (resolves to ID)', className: 'p-2 border rounded w-full sm:w-64' }),
+        summary && React.createElement('select', { value: filters.action, onChange: e => setFilters(f => ({ ...f, action: e.target.value })), className: 'p-2 border rounded' },
+          React.createElement('option', { value: '' }, 'All Actions'),
+          (summary.top_actions || []).map(a => React.createElement('option', { key: a.action, value: a.action }, `${a.action} (${a.count})`))
+        ),
+        React.createElement('input', { type: 'date', value: filters.start_date, onChange: e => setFilters(f => ({ ...f, start_date: e.target.value })), className: 'p-2 border rounded' }),
+        React.createElement('input', { type: 'date', value: filters.end_date, onChange: e => setFilters(f => ({ ...f, end_date: e.target.value })), className: 'p-2 border rounded' }),
+        React.createElement('select', { value: filters.sort_order, onChange: e => setFilters(f => ({ ...f, sort_order: e.target.value })), className: 'p-2 border rounded' },
+          React.createElement('option', { value: 'desc' }, 'Newest First'),
+          React.createElement('option', { value: 'asc' }, 'Oldest First')
+        ),
+        React.createElement('button', { onClick: () => applyFilters(), className: 'px-3 py-2 rounded bg-slate-900 text-white' }, 'Apply'),
+        React.createElement('button', { onClick: exportToCSV, className: 'px-3 py-2 rounded bg-gradient-to-r from-purple-600 to-blue-600 text-white' }, 'Export CSV')
+      ),
+      isLoading ? React.createElement(LoadingSpinner, { message: 'Loading audit logs...' }) : (error ? React.createElement('div', { className: 'p-3 bg-red-100 text-red-700 rounded' }, error) :
+        React.createElement('div', { className: 'overflow-x-auto bg-white rounded-xl shadow border border-slate-200' },
+          React.createElement('table', { className: 'min-w-full text-sm' },
+            React.createElement('thead', null,
+              React.createElement('tr', { className: 'text-left text-slate-600' },
+                ['Timestamp','Organization','User','Action','Details','View'].map(h => React.createElement('th', { key: h, className: 'py-2 px-3 border-b bg-slate-50' }, h))
+              )
+            ),
+            React.createElement('tbody', null,
+              (logs || []).length === 0 ? React.createElement('tr', null, React.createElement('td', { colSpan: 6, className: 'py-6 text-center text-slate-500' }, 'No logs found')) :
+              logs.map(l => React.createElement('tr', { key: l.id },
+                React.createElement('td', { className: 'py-2 px-3 border-b' }, l.timestamp ? formatDate(l.timestamp) : '—'),
+                React.createElement('td', { className: 'py-2 px-3 border-b' }, l.org_name || 'N/A'),
+                React.createElement('td', { className: 'py-2 px-3 border-b' }, l.user_email || 'System'),
+                React.createElement('td', { className: 'py-2 px-3 border-b' }, l.action),
+                React.createElement('td', { className: 'py-2 px-3 border-b font-mono text-xs' }, (l.details && typeof l.details === 'string') ? l.details.slice(0, 120) : JSON.stringify(l.details_parsed || {}).slice(0, 120)),
+                React.createElement('td', { className: 'py-2 px-3 border-b' }, React.createElement('button', { onClick: () => setDetailLog(l), className: 'px-2 py-1 text-xs rounded bg-slate-100 border' }, 'View'))
+              ))
+            )
+          ),
+          React.createElement(Pagination, { page: pagination.page || 1, totalPages: pagination.total_pages || 1, limit: pagination.limit || 100, totalCount: pagination.total_count || 0, onPageChange: (p) => fetchLogs(p), onLimitChange: (l) => fetchLogs(1, l) })
+        )
+      ),
+      detailLog && React.createElement(Modal, { title: 'Audit Log Details', onClose: () => setDetailLog(null) },
+        React.createElement('div', { className: 'text-xs whitespace-pre-wrap' }, JSON.stringify(detailLog, null, 2))
+      )
+    );
+  };
+
+  const SuperAdminApp = () => {
+    const [loggedInUser, setLoggedInUser] = useState(null);
+    const [isLoading, setIsLoading] = useState(true);
+    const [activeTab, setActiveTab] = useState('organizations');
+    const [notification, setNotification] = useState(null);
+    const navItems = [
+      { id: 'organizations', label: 'Organizations', description: 'Manage org onboarding', icon: BuildingIcon },
+      { id: 'users', label: 'Users', description: 'Approve and edit accounts', icon: UsersIcon },
+      { id: 'subscriptions', label: 'Subscriptions', description: 'Plan tracking', icon: DollarSignIcon },
+      { id: 'billing', label: 'Billing', description: 'Revenue analytics', icon: TrendingUpIcon },
+      { id: 'audit-logs', label: 'Audit Logs', description: 'Platform activity', icon: FileTextIcon }
+    ];
+
+    // AUTHENTICATION & AUTHORIZATION CHECK
+    // This dashboard is restricted to users with 'super_admin' role.
+    // 
+    // Authentication Flow:
+    // 1. Retrieve 'access_token' from localStorage
+    // 2. If missing, redirect to landing page (/)
+    // 3. Check if token is expired - if so, try refresh or show timeout
+    // 4. Parse JWT token to extract role, email, and user_id
+    // 5. Verify role is 'super_admin'
+    // 6. If not super_admin, show alert and redirect to /dashboard
+    // 7. If authorized, set user state and render dashboard
+    //
+    // Token Format: JWT with claims { role, email, user_id, org_id, plan }
+    useEffect(() => {
+      const checkAuth = async () => {
+        let token = localStorage.getItem('access_token');
+        if (!token) { 
+          window.location.href = '/'; 
+          return; 
+        }
+        
+        // Check if token is expired
+        if (isTokenExpired(token)) {
+          // Try to refresh the token
+          const newToken = await refreshAccessToken();
+          if (!newToken || isTokenExpired(newToken)) {
+            handleSessionTimeout();
+            return;
+          }
+          token = newToken; // Use the refreshed token
+        }
+        
+        const { role, email, user_id } = parseJwtRole(token);
+        if (role !== 'super_admin') { 
+          alert('Access denied. SuperAdmin privileges required.'); 
+          window.location.href = '/dashboard'; 
+          return; 
+        }
+        setLoggedInUser({ email, role, user_id });
+        setIsLoading(false);
+      };
+      
+      checkAuth();
+      
+      // Set up periodic token expiration check (every 30 seconds)
+      const tokenCheckInterval = setInterval(() => {
+        const token = localStorage.getItem('access_token');
+        if (isTokenExpired(token)) {
+          clearInterval(tokenCheckInterval);
+          handleSessionTimeout();
+        }
+      }, 30000);
+      
+      return () => clearInterval(tokenCheckInterval);
+    }, []);
+
+    const handleLogout = () => {
+      const accessToken = localStorage.getItem('access_token');
+      
+      // Call logout API to revoke token on server
+      if (accessToken) {
+        fetch('/api/logout', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + accessToken
+          }
+        }).catch(err => console.error('Logout API error:', err));
+      }
+      
+      // Clear all authentication data from localStorage
+      localStorage.removeItem('access_token');
+      localStorage.removeItem('refresh_token');
+      localStorage.removeItem('user_data');
+      // Clean up legacy auth format if present
+      localStorage.removeItem('aiProjectControlTowerAuth_v2');
+      sessionStorage.removeItem('trial_banner_dismissed');
+      sessionStorage.removeItem('trial_banner_dismissed_at');
+      
+      window.location.href = '/';
+    };
+
+    if (isLoading || !loggedInUser) return React.createElement(LoadingSpinner, { message: 'Loading SuperAdmin Dashboard...' });
+
+    return React.createElement('div', { className: 'min-h-screen flex bg-slate-50' },
+      React.createElement('aside', { className: 'hidden md:flex md:sticky md:top-0 md:h-screen w-72 flex-col bg-gradient-to-b from-indigo-700 via-indigo-800 to-purple-800 text-white shadow-2xl' },
+        React.createElement('div', { className: 'px-6 pt-8 pb-6 border-b border-white/10 flex items-center gap-4' },
+          React.createElement('div', { className: 'bg-white/10 backdrop-blur-sm p-2 rounded-lg' },
+            React.createElement('img', { src: '/static/logo.png', className: 'h-12 w-32 object-contain', alt: 'Logo' })
+          ),
+          React.createElement('div', null,
+            React.createElement('div', { className: 'text-xl font-bold' }, 'PROTON SuperAdmin'),
+            React.createElement('div', { className: 'text-xs text-indigo-100' }, loggedInUser.email)
+          )
+        ),
+        React.createElement('nav', { className: 'flex-1 overflow-y-auto px-4 py-6 space-y-2' },
+          navItems.map(item => {
+            const Icon = item.icon;
+            const isActive = activeTab === item.id;
+            return React.createElement('button', {
+              key: item.id,
+              onClick: () => setActiveTab(item.id),
+              className: `w-full flex items-start gap-3 px-4 py-3 rounded-xl text-left transition-all ${isActive ? 'bg-white text-indigo-800 shadow-lg' : 'text-indigo-100 hover:bg-white/10'}`
+            },
+              React.createElement('div', { className: `p-2 rounded-lg ${isActive ? 'bg-indigo-100 text-indigo-700' : 'bg-white/10 text-white'}` },
+                React.createElement(Icon, { size: 20, className: 'shrink-0' })
+              ),
+              React.createElement('div', null,
+                React.createElement('div', { className: 'font-semibold text-sm' }, item.label),
+                React.createElement('div', { className: `text-xs ${isActive ? 'text-indigo-500' : 'text-indigo-200'}` }, item.description)
+              )
+            );
+          })
+        ),
+        React.createElement('div', { className: 'px-6 pb-8 mt-auto' },
+          React.createElement('button', { onClick: handleLogout, className: 'w-full flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-white/10 border border-white/20 text-sm font-semibold hover:bg-white/20 transition-all' },
+            React.createElement(LogOutIcon, { size: 16 }),
+            'Logout'
+          )
+        )
+      ),
+      React.createElement('div', { className: 'flex-1 flex flex-col' },
+        React.createElement('header', { className: 'md:hidden bg-gradient-to-r from-indigo-600 via-purple-600 to-indigo-700 px-4 py-4 shadow-lg text-white space-y-3 sticky top-0 z-30' },
+          React.createElement('div', { className: 'flex items-center justify-between' },
+            React.createElement('div', { className: 'flex items-center gap-3' },
+              React.createElement('img', { src: '/static/logo.png', className: 'h-10 w-32 rounded-lg border border-white/20 object-contain', alt: 'Logo' }),
+              React.createElement('div', null,
+                React.createElement('div', { className: 'text-lg font-semibold' }, 'PROTON SuperAdmin'),
+                React.createElement('div', { className: 'text-xs text-indigo-100' }, loggedInUser.email)
+              )
+            ),
+            React.createElement('button', { onClick: handleLogout, className: 'px-3 py-2 text-xs font-medium bg-white/10 rounded-lg border border-white/20 flex items-center gap-2' }, React.createElement(LogOutIcon, { size: 14 }), 'Logout')
+          ),
+          React.createElement('div', { className: 'flex gap-2 overflow-x-auto pb-1' },
+            navItems.map(item => React.createElement('button', {
+              key: item.id,
+              onClick: () => setActiveTab(item.id),
+              className: `px-3 py-2 rounded-lg text-xs font-semibold ${activeTab === item.id ? 'bg-white text-indigo-700 shadow' : 'bg-white/20 text-white'}`
+            }, item.label))
+          )
+        ),
+        React.createElement('main', { className: 'flex-1 px-4 py-6 md:px-8 md:py-10 space-y-8' },
+          activeTab === 'organizations' && React.createElement(OrganizationsTable, null),
+          activeTab === 'users' && React.createElement(UsersTable, null),
+          activeTab === 'subscriptions' && React.createElement(SubscriptionsTable, null),
+          activeTab === 'billing' && React.createElement(BillingDashboard, null),
+          activeTab === 'audit-logs' && React.createElement(AuditLogsViewer, null)
+        )
+      ),
+      notification && React.createElement(NotificationToast, { message: notification.message, type: notification.type, onDismiss: () => setNotification(null) })
+    );
+  };
+
+  const root = ReactDOM.createRoot(document.getElementById('root'));
+  root.render(React.createElement(SuperAdminApp));
+</script>
+</body>
+</html>

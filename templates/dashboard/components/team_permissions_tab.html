@@ -1,0 +1,439 @@
+<script type="text/babel">
+    const TeamPermissionsTab = ({ selectedProject, loggedInUser, isTrialExpired }) => {
+        const { useState, useEffect } = React;
+        const [projectMembers, setProjectMembers] = useState([]);
+        const [availableUsers, setAvailableUsers] = useState([]);
+        const [isLoading, setIsLoading] = useState(true);
+        const [showAddMemberModal, setShowAddMemberModal] = useState(false);
+        const [selectedMember, setSelectedMember] = useState(null);
+        const [newMemberRole, setNewMemberRole] = useState('member');
+        const [newMemberUserId, setNewMemberUserId] = useState(null);
+        const [memberPermissions, setMemberPermissions] = useState({}); // Map of user_id -> permissions object
+        
+        // Load project members
+        useEffect(() => {
+            if (selectedProject) {
+                // Extract project ID from project name or use project name
+                const projectId = selectedProject; // This might need to be adjusted based on your API
+                
+                makeAuthenticatedRequest(`/api/projects/${encodeURIComponent(projectId)}/members`, {
+                    method: 'GET',
+                    headers: { 'Content-Type': 'application/json' }
+                })
+                .then(res => res.json())
+                .then(data => {
+                    if (data.status === 'success' && data.members) {
+                        setProjectMembers(data.members);
+                        // Initialize permissions state from loaded members
+                        const permsMap = {};
+                        data.members.forEach(member => {
+                            if (member.permissions) {
+                                try {
+                                    permsMap[member.user_id] = typeof member.permissions === 'string' 
+                                        ? JSON.parse(member.permissions) 
+                                        : member.permissions;
+                                } catch (e) {
+                                    permsMap[member.user_id] = {};
+                                }
+                            }
+                        });
+                        setMemberPermissions(permsMap);
+                    }
+                })
+                .catch(err => console.error('Failed to load project members:', err))
+                .finally(() => setIsLoading(false));
+            }
+        }, [selectedProject]);
+        
+        // Load available users (for adding members)
+        useEffect(() => {
+            if (loggedInUser && (loggedInUser.role === 'super_admin' || loggedInUser.role === 'org_admin')) {
+                makeAuthenticatedRequest('/api/users', {
+                    method: 'GET',
+                    headers: { 'Content-Type': 'application/json' }
+                })
+                .then(res => res.json())
+                .then(data => {
+                    if (data.status === 'success' && data.users) {
+                        setAvailableUsers(data.users);
+                    }
+                })
+                .catch(err => console.error('Failed to load users:', err));
+            }
+        }, [loggedInUser]);
+        
+        // Handle add member
+        const handleAddMember = async (userId, role, permissions) => {
+            const projectId = selectedProject;
+            try {
+                const response = await makeAuthenticatedRequest(`/api/projects/${encodeURIComponent(projectId)}/members`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ user_id: userId, role, permissions })
+                });
+                const result = await response.json();
+                if (result.status === 'success') {
+                    // Reload members
+                    makeAuthenticatedRequest(`/api/projects/${encodeURIComponent(projectId)}/members`, {
+                        method: 'GET',
+                        headers: { 'Content-Type': 'application/json' }
+                    })
+                    .then(res => res.json())
+                    .then(data => {
+                        if (data.status === 'success' && data.members) {
+                            setProjectMembers(data.members);
+                        }
+                    });
+                    setShowAddMemberModal(false);
+                } else {
+                    throw new Error(result.message || 'Failed to add member');
+                }
+            } catch (error) {
+                alert(`Error adding member: ${error.message}`);
+            }
+        };
+        
+        // Handle remove member
+        const handleRemoveMember = async (userId) => {
+            if (!window.confirm('Are you sure you want to remove this member?')) return;
+            
+            const projectId = selectedProject;
+            try {
+                const response = await makeAuthenticatedRequest(`/api/projects/${encodeURIComponent(projectId)}/members/${userId}`, {
+                    method: 'DELETE',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                const result = await response.json();
+                if (result.status === 'success') {
+                    setProjectMembers(projectMembers.filter(m => m.user_id !== userId));
+                } else {
+                    throw new Error(result.message || 'Failed to remove member');
+                }
+            } catch (error) {
+                alert(`Error removing member: ${error.message}`);
+            }
+        };
+        
+        // Handle role change
+        const handleRoleChange = async (userId, newRole) => {
+            const projectId = selectedProject;
+            try {
+                const response = await makeAuthenticatedRequest(`/api/projects/${encodeURIComponent(projectId)}/members/${userId}/role`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ role: newRole })
+                });
+                const result = await response.json();
+                if (result.status === 'success') {
+                    setProjectMembers(projectMembers.map(m => 
+                        m.user_id === userId ? { ...m, role: newRole } : m
+                    ));
+                } else {
+                    throw new Error(result.message || 'Failed to update role');
+                }
+            } catch (error) {
+                alert(`Error updating role: ${error.message}`);
+            }
+        };
+        
+        // Handle permission update
+        const handlePermissionUpdate = async (userId, permissions) => {
+            const projectId = selectedProject;
+            try {
+                const response = await makeAuthenticatedRequest(`/api/projects/${encodeURIComponent(projectId)}/members/${userId}/permissions`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ permissions })
+                });
+                const result = await response.json();
+                if (result.status === 'success') {
+                    // Update local state
+                    setMemberPermissions({ ...memberPermissions, [userId]: permissions });
+                } else {
+                    throw new Error(result.message || 'Failed to update permissions');
+                }
+            } catch (error) {
+                console.error(`Error updating permissions: ${error.message}`);
+                // Revert local state on error
+                const member = projectMembers.find(m => m.user_id === userId);
+                if (member && member.permissions) {
+                    try {
+                        const originalPerms = typeof member.permissions === 'string' 
+                            ? JSON.parse(member.permissions) 
+                            : member.permissions;
+                        setMemberPermissions({ ...memberPermissions, [userId]: originalPerms });
+                    } catch (e) {
+                        // Ignore parse errors
+                    }
+                }
+            }
+        };
+        
+        // Get user initials for avatar
+        const getUserInitials = (name) => {
+            if (!name) return '?';
+            const parts = name.split(' ');
+            if (parts.length >= 2) {
+                return (parts[0][0] + parts[1][0]).toUpperCase();
+            }
+            return name[0].toUpperCase();
+        };
+        
+        return React.createElement("div", { className: "team-permissions-tab-container space-y-6" },
+            // Gradient Header
+            React.createElement("div", { className: "bg-gradient-to-r from-pink-500 to-violet-600 text-white p-6 rounded-xl shadow-lg" },
+                React.createElement("div", { className: "flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4" },
+                    React.createElement("h2", { className: "text-2xl font-bold" }, "Team & Permissions"),
+                    React.createElement("div", { className: "flex gap-2" },
+                        loggedInUser && (loggedInUser.role === 'super_admin' || loggedInUser.role === 'org_admin') && React.createElement("button", {
+                            onClick: () => setShowAddMemberModal(true),
+                            disabled: isTrialExpired,
+                            className: `px-4 py-2 bg-white/20 hover:bg-white/30 rounded-lg text-sm font-semibold transition-colors ${isTrialExpired ? 'opacity-50 cursor-not-allowed' : ''}`
+                        }, "Add Member"),
+                        React.createElement("button", {
+                            onClick: () => {
+                                // TODO: Invite External User flow - backend and modal to be implemented in a later phase
+                                alert('Invite External User feature - to be implemented in a later phase');
+                            },
+                            className: "px-4 py-2 bg-white/20 hover:bg-white/30 rounded-lg text-sm font-semibold transition-colors"
+                        }, "Invite External User")
+                    )
+                )
+            ),
+            
+            // Team Members List
+            React.createElement("div", { className: "bg-white rounded-xl shadow-md overflow-hidden" },
+                React.createElement("div", { className: "bg-gradient-to-r from-pink-500 to-violet-600 text-white p-4 font-semibold" }, "Project Team"),
+                isLoading ? (
+                    React.createElement("div", { className: "p-8 text-center" },
+                        React.createElement("div", { className: "ai-spinner inline-block" }),
+                        React.createElement("p", { className: "mt-4 text-gray-600" }, "Loading team members...")
+                    )
+                ) : projectMembers.length > 0 ? (
+                    React.createElement("div", { className: "overflow-x-auto" },
+                        React.createElement("table", { className: "min-w-full divide-y divide-gray-200" },
+                            React.createElement("thead", { className: "bg-gray-50" },
+                                React.createElement("tr", null,
+                                    React.createElement("th", { className: "px-4 py-3 text-left text-xs font-semibold text-gray-700" }, "Avatar"),
+                                    React.createElement("th", { className: "px-4 py-3 text-left text-xs font-semibold text-gray-700" }, "Name"),
+                                    React.createElement("th", { className: "px-4 py-3 text-left text-xs font-semibold text-gray-700" }, "Email"),
+                                    React.createElement("th", { className: "px-4 py-3 text-left text-xs font-semibold text-gray-700" }, "Role"),
+                                    React.createElement("th", { className: "px-4 py-3 text-left text-xs font-semibold text-gray-700" }, "Permissions"),
+                                    React.createElement("th", { className: "px-4 py-3 text-left text-xs font-semibold text-gray-700" }, "Actions")
+                                )
+                            ),
+                            React.createElement("tbody", { className: "divide-y divide-gray-200" },
+                                projectMembers.map((member, idx) => (
+                                    React.createElement("tr", {
+                                        key: idx,
+                                        className: "hover:bg-gray-50 transition-colors"
+                                    },
+                                        React.createElement("td", { className: "px-4 py-3" },
+                                            React.createElement("div", {
+                                                className: "team-avatar w-10 h-10 rounded-full bg-gradient-to-r from-pink-500 to-violet-600 text-white flex items-center justify-center font-bold"
+                                            }, getUserInitials(member.name || member.email))
+                                        ),
+                                        React.createElement("td", { className: "px-4 py-3 text-sm font-medium text-gray-800" }, member.name || 'N/A'),
+                                        React.createElement("td", { className: "px-4 py-3 text-sm text-gray-500" }, member.email),
+                                        React.createElement("td", { className: "px-4 py-3" },
+                                            loggedInUser && (loggedInUser.role === 'super_admin' || loggedInUser.role === 'org_admin') ? (
+                                                React.createElement("select", {
+                                                    value: member.role || 'viewer',
+                                                    onChange: (e) => handleRoleChange(member.user_id, e.target.value),
+                                                    className: "team-role-dropdown px-3 py-1 border border-gray-300 rounded-md text-sm focus:ring-2 focus:ring-pink-500 focus:outline-none"
+                                                },
+                                                    React.createElement("option", { value: "admin" }, "Project Admin"),
+                                                    React.createElement("option", { value: "member" }, "Member"),
+                                                    React.createElement("option", { value: "viewer" }, "Viewer"),
+                                                    React.createElement("option", { value: "client" }, "Client")
+                                                )
+                                            ) : (
+                                                React.createElement("span", { className: "px-2 py-1 text-xs rounded-full bg-gray-100 text-gray-700" },
+                                                    member.role || 'viewer'
+                                                )
+                                            )
+                                        ),
+                                        React.createElement("td", { className: "px-4 py-3" },
+                                            React.createElement("div", { className: "flex flex-wrap gap-3" },
+                                                React.createElement("label", { className: "flex items-center gap-2 cursor-pointer" },
+                                                    React.createElement("input", {
+                                                        type: "checkbox",
+                                                        checked: (() => {
+                                                            const perms = memberPermissions[member.user_id] || (member.permissions ? (typeof member.permissions === 'string' ? JSON.parse(member.permissions) : member.permissions) : {});
+                                                            return perms.viewTasks !== false;
+                                                        })(),
+                                                        onChange: (e) => {
+                                                            const perms = memberPermissions[member.user_id] || (member.permissions ? (typeof member.permissions === 'string' ? JSON.parse(member.permissions) : member.permissions) : {});
+                                                            const newPerms = { ...perms, viewTasks: e.target.checked };
+                                                            setMemberPermissions({ ...memberPermissions, [member.user_id]: newPerms });
+                                                            handlePermissionUpdate(member.user_id, newPerms);
+                                                        },
+                                                        className: "h-4 w-4 rounded text-pink-600 focus:ring-pink-500"
+                                                    }),
+                                                    React.createElement("span", { className: "text-xs text-gray-700" }, "View Tasks")
+                                                ),
+                                                React.createElement("label", { className: "flex items-center gap-2 cursor-pointer" },
+                                                    React.createElement("input", {
+                                                        type: "checkbox",
+                                                        checked: (() => {
+                                                            const perms = memberPermissions[member.user_id] || (member.permissions ? (typeof member.permissions === 'string' ? JSON.parse(member.permissions) : member.permissions) : {});
+                                                            return perms.editTasks === true;
+                                                        })(),
+                                                        onChange: (e) => {
+                                                            const perms = memberPermissions[member.user_id] || (member.permissions ? (typeof member.permissions === 'string' ? JSON.parse(member.permissions) : member.permissions) : {});
+                                                            const newPerms = { ...perms, editTasks: e.target.checked };
+                                                            setMemberPermissions({ ...memberPermissions, [member.user_id]: newPerms });
+                                                            handlePermissionUpdate(member.user_id, newPerms);
+                                                        },
+                                                        className: "h-4 w-4 rounded text-pink-600 focus:ring-pink-500"
+                                                    }),
+                                                    React.createElement("span", { className: "text-xs text-gray-700" }, "Edit Tasks")
+                                                ),
+                                                loggedInUser && (loggedInUser.role === 'super_admin' || loggedInUser.role === 'org_admin') && React.createElement("label", { className: "flex items-center gap-2 cursor-pointer" },
+                                                    React.createElement("input", {
+                                                        type: "checkbox",
+                                                        checked: (() => {
+                                                            const perms = memberPermissions[member.user_id] || (member.permissions ? (typeof member.permissions === 'string' ? JSON.parse(member.permissions) : member.permissions) : {});
+                                                            return perms.deleteTasks === true;
+                                                        })(),
+                                                        onChange: (e) => {
+                                                            const perms = memberPermissions[member.user_id] || (member.permissions ? (typeof member.permissions === 'string' ? JSON.parse(member.permissions) : member.permissions) : {});
+                                                            const newPerms = { ...perms, deleteTasks: e.target.checked };
+                                                            setMemberPermissions({ ...memberPermissions, [member.user_id]: newPerms });
+                                                            handlePermissionUpdate(member.user_id, newPerms);
+                                                        },
+                                                        className: "h-4 w-4 rounded text-pink-600 focus:ring-pink-500"
+                                                    }),
+                                                    React.createElement("span", { className: "text-xs text-gray-700" }, "Delete Tasks")
+                                                ),
+                                                React.createElement("label", { className: "flex items-center gap-2 cursor-pointer" },
+                                                    React.createElement("input", {
+                                                        type: "checkbox",
+                                                        checked: (() => {
+                                                            const perms = memberPermissions[member.user_id] || (member.permissions ? (typeof member.permissions === 'string' ? JSON.parse(member.permissions) : member.permissions) : {});
+                                                            return perms.manageDocuments === true;
+                                                        })(),
+                                                        onChange: (e) => {
+                                                            const perms = memberPermissions[member.user_id] || (member.permissions ? (typeof member.permissions === 'string' ? JSON.parse(member.permissions) : member.permissions) : {});
+                                                            const newPerms = { ...perms, manageDocuments: e.target.checked };
+                                                            setMemberPermissions({ ...memberPermissions, [member.user_id]: newPerms });
+                                                            handlePermissionUpdate(member.user_id, newPerms);
+                                                        },
+                                                        className: "h-4 w-4 rounded text-pink-600 focus:ring-pink-500"
+                                                    }),
+                                                    React.createElement("span", { className: "text-xs text-gray-700" }, "Manage Documents")
+                                                ),
+                                                React.createElement("label", { className: "flex items-center gap-2 cursor-pointer" },
+                                                    React.createElement("input", {
+                                                        type: "checkbox",
+                                                        checked: (() => {
+                                                            const perms = memberPermissions[member.user_id] || (member.permissions ? (typeof member.permissions === 'string' ? JSON.parse(member.permissions) : member.permissions) : {});
+                                                            return perms.viewReports !== false;
+                                                        })(),
+                                                        onChange: (e) => {
+                                                            const perms = memberPermissions[member.user_id] || (member.permissions ? (typeof member.permissions === 'string' ? JSON.parse(member.permissions) : member.permissions) : {});
+                                                            const newPerms = { ...perms, viewReports: e.target.checked };
+                                                            setMemberPermissions({ ...memberPermissions, [member.user_id]: newPerms });
+                                                            handlePermissionUpdate(member.user_id, newPerms);
+                                                        },
+                                                        className: "h-4 w-4 rounded text-pink-600 focus:ring-pink-500"
+                                                    }),
+                                                    React.createElement("span", { className: "text-xs text-gray-700" }, "View Reports")
+                                                )
+                                            )
+                                        ),
+                                        React.createElement("td", { className: "px-4 py-3" },
+                                            loggedInUser && (loggedInUser.role === 'super_admin' || loggedInUser.role === 'org_admin') && (
+                                                React.createElement("button", {
+                                                    onClick: () => handleRemoveMember(member.user_id),
+                                                    className: "px-3 py-1 bg-red-500 hover:bg-red-600 text-white text-xs rounded transition-colors"
+                                                }, "Remove")
+                                            )
+                                        )
+                                    )
+                                ))
+                            )
+                        )
+                    )
+                ) : (
+                    React.createElement("div", { className: "p-8 text-center text-gray-400" },
+                        React.createElement("p", null, "No team members yet")
+                    )
+                )
+            ),
+            
+            // Add Member Modal
+            showAddMemberModal && React.createElement("div", {
+                className: "fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50"
+            },
+                React.createElement("div", {
+                    className: "bg-white rounded-xl shadow-xl p-6 max-w-md w-full"
+                },
+                    React.createElement("h3", { className: "text-xl font-bold mb-4" }, "Add Team Member"),
+                    React.createElement("div", { className: "space-y-4" },
+                        React.createElement("div", null,
+                            React.createElement("label", { className: "block text-sm font-semibold mb-2" }, "Select User"),
+                            React.createElement("select", {
+                                value: newMemberUserId || '',
+                                className: "w-full px-3 py-2 border border-gray-300 rounded-lg",
+                                onChange: (e) => {
+                                    const userId = e.target.value ? parseInt(e.target.value) : null;
+                                    setNewMemberUserId(userId);
+                                    const user = availableUsers.find(u => u.id === userId || u.id === parseInt(userId));
+                                    if (user) {
+                                        setSelectedMember(user);
+                                    } else {
+                                        setSelectedMember(null);
+                                    }
+                                }
+                            },
+                                React.createElement("option", { value: "" }, "Choose a user..."),
+                                availableUsers.filter(u => !projectMembers.some(m => m.user_id === u.id || m.user_id === parseInt(u.id))).map(user => (
+                                    React.createElement("option", { key: user.id, value: String(user.id) }, user.name || user.email)
+                                ))
+                            )
+                        ),
+                        selectedMember && React.createElement(React.Fragment, null,
+                            React.createElement("div", null,
+                                React.createElement("label", { className: "block text-sm font-semibold mb-2" }, "Role"),
+                                React.createElement("select", {
+                                    value: newMemberRole,
+                                    onChange: (e) => setNewMemberRole(e.target.value),
+                                    className: "w-full px-3 py-2 border border-gray-300 rounded-lg"
+                                },
+                                    React.createElement("option", { value: "member" }, "Member"),
+                                    React.createElement("option", { value: "viewer" }, "Viewer"),
+                                    React.createElement("option", { value: "admin" }, "Project Admin")
+                                )
+                            )
+                        ),
+                        React.createElement("div", { className: "flex gap-2" },
+                            React.createElement("button", {
+                                onClick: () => {
+                                    if (newMemberUserId) {
+                                        handleAddMember(newMemberUserId, newMemberRole, {});
+                                        setNewMemberUserId(null);
+                                        setNewMemberRole('member');
+                                        setSelectedMember(null);
+                                    }
+                                },
+                                disabled: !newMemberUserId,
+                                className: `flex-1 px-4 py-2 bg-gradient-to-r from-pink-500 to-violet-600 text-white rounded-lg font-semibold hover:from-pink-600 hover:to-violet-700 transition-all ${!newMemberUserId ? 'opacity-50 cursor-not-allowed' : ''}`
+                            }, "Add"),
+                            React.createElement("button", {
+                                onClick: () => {
+                                    setShowAddMemberModal(false);
+                                    setNewMemberUserId(null);
+                                    setNewMemberRole('member');
+                                    setSelectedMember(null);
+                                },
+                                className: "flex-1 px-4 py-2 bg-gray-200 hover:bg-gray-300 rounded-lg font-semibold transition-colors"
+                            }, "Cancel")
+                        )
+                    )
+                )
+            )
+        );
+    };
+</script>
+

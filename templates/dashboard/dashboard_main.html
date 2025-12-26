@@ -1,0 +1,51 @@
+{% extends 'dashboard/base.html' %}
+{#
+This template extends base.html which includes auth_config.html for client-side authentication.
+Users without valid JWT tokens in localStorage will be redirected to / before this page renders.
+All data is fetched via authenticated API calls from the DashboardApp React component.
+#}
+{% block header %}
+<div class="flex items-center justify-between px-6 py-4">
+    <div>
+        <h1 class="text-2xl font-bold text-slate-900">Portfolio Overview</h1>
+        <p class="text-sm text-slate-500 mt-1">
+            See an overall perspective of all projects – portfolio health, progress, and delay patterns – without going
+            into task-level details.
+        </p>
+    </div>
+</div>
+{% endblock %}
+
+{% block content %}
+<div id="dashboard-root" class="dashboard-grid">
+    <!-- Skeleton Loader (Visible until React mounts) -->
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8 animate-pulse">
+        {% for i in range(4) %}
+        <div class="bg-white rounded-xl shadow-sm p-6 border border-slate-100">
+            <div class="flex items-center justify-between mb-4">
+                <div class="h-4 w-24 bg-slate-200 rounded"></div>
+                <div class="h-8 w-8 bg-slate-200 rounded-full"></div>
+            </div>
+            <div class="h-8 w-16 bg-slate-200 rounded mb-2"></div>
+            <div class="h-3 w-32 bg-slate-200 rounded"></div>
+        </div>
+        {% endfor %}
+    </div>
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-pulse">
+        <div class="lg:col-span-2 bg-white rounded-xl shadow-sm p-6 border border-slate-100 h-96">
+            <div class="h-6 w-48 bg-slate-200 rounded mb-6"></div>
+            <div class="space-y-4">
+                <div class="h-4 w-full bg-slate-200 rounded"></div>
+                <div class="h-4 w-5/6 bg-slate-200 rounded"></div>
+                <div class="h-4 w-4/6 bg-slate-200 rounded"></div>
+            </div>
+        </div>
+        <div class="bg-white rounded-xl shadow-sm p-6 border border-slate-100 h-96">
+            <div class="h-6 w-32 bg-slate-200 rounded mb-6"></div>
+            <div class="flex justify-center items-center h-64">
+                <div class="h-40 w-40 bg-slate-200 rounded-full"></div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
