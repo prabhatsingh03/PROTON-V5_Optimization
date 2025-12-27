@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Subscription Activated - PROTON</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: Arial, Helvetica, sans-serif;
+            background-color: #f4f6fb;
+            color: #1f2937;
+        }
+        .wrapper {
+            width: 100%;
+            background-color: #f4f6fb;
+            padding: 24px 0;
+        }
+        .card {
+            max-width: 600px;
+            margin: 0 auto;
+            background-color: #ffffff;
+            border-radius: 12px;
+            box-shadow: 0 8px 24px rgba(31, 41, 55, 0.1);
+            overflow: hidden;
+        }
+        .header {
+            background: linear-gradient(135deg, #1d4ed8, #2563eb);
+            padding: 32px;
+            text-align: center;
+            color: #ffffff;
+        }
+        .header h1 {
+            margin: 0;
+            font-size: 24px;
+            letter-spacing: 0.05em;
+        }
+        .content {
+            padding: 32px;
+        }
+        .greeting {
+            margin: 0 0 16px;
+            font-size: 18px;
+            font-weight: 600;
+        }
+        .message {
+            margin: 0 0 24px;
+            line-height: 1.6;
+        }
+        .features {
+            background-color: #eff6ff;
+            border: 1px solid #bfdbfe;
+            border-radius: 10px;
+            padding: 24px;
+            margin: 16px 0 24px;
+        }
+        .feature-item {
+            padding: 8px 0;
+            color: #1e40af;
+        }
+        .footer {
+            padding: 24px 32px 32px;
+            font-size: 14px;
+            color: #6b7280;
+            line-height: 1.5;
+        }
+        .footer a {
+            color: #2563eb;
+            text-decoration: none;
+        }
+        @media (max-width: 600px) {
+            .card {
+                margin: 0 16px;
+            }
+            .content, .footer {
+                padding: 24px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="wrapper">
+        <div class="card">
+            <div class="header">
+                <h1>🎉 Welcome to PROTON</h1>
+                <p style="margin: 8px 0 0; font-size: 14px; letter-spacing: 0.1em;">Your Subscription is Active</p>
+            </div>
+            <div class="content">
+                <p class="greeting">Hello {{USER_NAME}},</p>
+                <p class="message">
+                    Great news! Your PROTON subscription has been activated successfully. You now have full access to all features of your {{PLAN_TYPE}} plan.
+                </p>
+                <div class="features">
+                    <p style="margin: 0 0 12px; font-weight: 600; color: #1e40af;">Your subscription includes:</p>
+                    <div class="feature-item">✓ {{PLAN_TYPE}} Plan Features</div>
+                    <div class="feature-item">✓ Billing Cycle: {{BILLING_CYCLE}}</div>
+                    <div class="feature-item">✓ Start Date: {{START_DATE}}</div>
+                    <div class="feature-item">✓ Next Billing: {{NEXT_BILLING_DATE}}</div>
+                </div>
+                <p class="message">
+                    You can manage your subscription, view usage, and access all PROTON features from your dashboard.
+                </p>
+            </div>
+            <div class="footer">
+                <p>Best regards,<br><strong>The PROTON Team</strong></p>
+                <p>Need help? Contact us at <a href="mailto:support@proton.com">support@proton.com</a></p>
+                <p style="margin-top: 16px; font-size: 12px;">© {{CURRENT_YEAR}} PROTON. All rights reserved.</p>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
+

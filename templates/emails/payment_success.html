@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Payment Successful - PROTON</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: Arial, Helvetica, sans-serif;
+            background-color: #f4f6fb;
+            color: #1f2937;
+        }
+        .wrapper {
+            width: 100%;
+            background-color: #f4f6fb;
+            padding: 24px 0;
+        }
+        .card {
+            max-width: 600px;
+            margin: 0 auto;
+            background-color: #ffffff;
+            border-radius: 12px;
+            box-shadow: 0 8px 24px rgba(31, 41, 55, 0.1);
+            overflow: hidden;
+        }
+        .header {
+            background: linear-gradient(135deg, #059669, #10b981);
+            padding: 32px;
+            text-align: center;
+            color: #ffffff;
+        }
+        .header h1 {
+            margin: 0;
+            font-size: 24px;
+            letter-spacing: 0.05em;
+        }
+        .content {
+            padding: 32px;
+        }
+        .greeting {
+            margin: 0 0 16px;
+            font-size: 18px;
+            font-weight: 600;
+        }
+        .message {
+            margin: 0 0 24px;
+            line-height: 1.6;
+        }
+        .payment-details {
+            background-color: #f0fdf4;
+            border: 1px solid #bbf7d0;
+            border-radius: 10px;
+            padding: 24px;
+            margin: 16px 0 24px;
+        }
+        .detail-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 12px 0;
+            border-bottom: 1px solid #d1fae5;
+        }
+        .detail-row:last-child {
+            border-bottom: none;
+        }
+        .detail-label {
+            font-weight: 600;
+            color: #065f46;
+        }
+        .detail-value {
+            color: #047857;
+            font-weight: 500;
+        }
+        .amount {
+            font-size: 28px;
+            font-weight: 700;
+            color: #059669;
+            text-align: center;
+            padding: 16px 0;
+        }
+        .footer {
+            padding: 24px 32px 32px;
+            font-size: 14px;
+            color: #6b7280;
+            line-height: 1.5;
+        }
+        .footer a {
+            color: #2563eb;
+            text-decoration: none;
+        }
+        @media (max-width: 600px) {
+            .card {
+                margin: 0 16px;
+            }
+            .content, .footer {
+                padding: 24px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="wrapper">
+        <div class="card">
+            <div class="header">
+                <h1>✓ Payment Successful</h1>
+                <p style="margin: 8px 0 0; font-size: 14px; letter-spacing: 0.1em;">PROTON Subscription</p>
+            </div>
+            <div class="content">
+                <p class="greeting">Hello {{USER_NAME}},</p>
+                <p class="message">
+                    Thank you for your payment! Your PROTON subscription has been successfully activated.
+                </p>
+                <div class="payment-details">
+                    <div class="amount">₹{{AMOUNT}}</div>
+                    <div class="detail-row">
+                        <span class="detail-label">Payment ID:</span>
+                        <span class="detail-value">{{PAYMENT_ID}}</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="detail-label">Plan:</span>
+                        <span class="detail-value">{{PLAN_TYPE}}</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="detail-label">Billing Cycle:</span>
+                        <span class="detail-value">{{BILLING_CYCLE}}</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="detail-label">Date:</span>
+                        <span class="detail-value">{{PAYMENT_DATE}}</span>
+                    </div>
+                </div>
+                <p class="message">
+                    Your subscription is now active and you have full access to all PROTON features. You can manage your subscription from your dashboard.
+                </p>
+            </div>
+            <div class="footer">
+                <p>Best regards,<br><strong>The PROTON Team</strong></p>
+                <p>Need help? Contact us at <a href="mailto:support@proton.com">support@proton.com</a></p>
+                <p style="margin-top: 16px; font-size: 12px;">© {{CURRENT_YEAR}} PROTON. All rights reserved.</p>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
+

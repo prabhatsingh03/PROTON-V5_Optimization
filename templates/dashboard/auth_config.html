@@ -436,6 +436,10 @@
                         : { label: 'Contact Admin', onClick: () => { try { alert('Please contact your Organization Admin to upgrade your plan.'); } catch (e) { } } };
                     if (typeof window.showNotification === 'function') {
                         window.showNotification({ message, type: 'error', action, duration: 12000 });
+                    } else {
+                        // Fallback if React notification system isn't ready
+                        console.warn('Notification system not ready, using alert/log:', message);
+                        alert(message);
                     }
                     if (typeof window.refreshUsageStats === 'function') {
                         window.refreshUsageStats();

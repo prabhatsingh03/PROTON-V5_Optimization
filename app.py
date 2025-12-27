@@ -43,6 +43,14 @@ import bleach
 from werkzeug.security import safe_join
 import atexit
 import signal
+try:
+    from apscheduler.schedulers.background import BackgroundScheduler
+    from apscheduler.triggers.cron import CronTrigger
+    APSCHEDULER_AVAILABLE = True
+except ImportError:
+    APSCHEDULER_AVAILABLE = False
+    BackgroundScheduler = None
+    CronTrigger = None
 from config import (
     DB_TYPE,
     MYSQL_HOST,
@@ -75,7 +83,13 @@ from utils.db_utils import (
     get_db_connection as base_get_db_connection,
     get_tenant_db_name,
 )
-from utils.email_service import send_otp_email, send_password_reset_email
+from utils.email_service import (
+    send_otp_email, 
+    send_password_reset_email,
+    send_payment_success_email,
+    send_payment_failed_email,
+    send_subscription_activated_email
+)
 DEV_MODE = os.getenv('DEV_MODE', 'false').lower() == 'true'
 load_dotenv()
 
@@ -184,7 +198,10 @@ ROLE_CLIENT = 'client'
 ORG_ADMIN_CREATABLE_ROLES = [ROLE_ORG_ADMIN, ROLE_ORG_USER]
 
 # Maximum org admins allowed (hard limit for all plans)
-MAX_ORG_ADMINS = 2
+MAX_ORG_ADMINS = 100
+
+# Maximum user count allowed for subscriptions (prevents calculation errors)
+MAX_USER_COUNT = 1000
 
 # Valid user statuses
 USER_STATUS_PENDING = 'pending'
@@ -698,10 +715,64 @@ def add_security_headers(response):
         pass
     return response
 
-# Razorpay Configuration
-RAZORPAY_KEY_ID = os.environ.get('RAZORPAY_KEY_ID', '')
-RAZORPAY_KEY_SECRET = os.environ.get('RAZORPAY_KEY_SECRET', '')
-RAZORPAY_WEBHOOK_SECRET = os.environ.get('RAZORPAY_WEBHOOK_SECRET', '')
+# Secure Credential Management
+def get_decrypted_credential(env_var_name, default=''):
+	"""
+	Get decrypted credential from environment variables.
+	
+	Supports both plain-text (for backward compatibility) and encrypted credentials.
+	For encrypted credentials, the environment variable should be prefixed with 'ENCRYPTED_'
+	and the value should be a base64-encoded encrypted string.
+	
+	Production Recommendation:
+	Use a dedicated secret management service like:
+	- AWS Secrets Manager
+	- Azure Key Vault
+	- HashiCorp Vault
+	- Google Cloud Secret Manager
+	
+	Args:
+		env_var_name: Name of the environment variable
+		default: Default value if not found
+		
+	Returns:
+		Decrypted credential string
+	"""
+	# Try encrypted version first
+	encrypted_var = f"ENCRYPTED_{env_var_name}"
+	encrypted_value = os.environ.get(encrypted_var, '')
+	
+	if encrypted_value and ENCRYPTION_KEY:
+		try:
+			import base64
+			from cryptography.fernet import Fernet
+			# Ensure key is properly formatted
+			if len(ENCRYPTION_KEY) == 32:
+				# If key is 32 bytes, encode it as base64 for Fernet
+				key = base64.urlsafe_b64encode(ENCRYPTION_KEY.encode()[:32])
+			else:
+				key = ENCRYPTION_KEY.encode()
+			cipher = Fernet(key)
+			decrypted = cipher.decrypt(encrypted_value.encode()).decode()
+			return decrypted
+		except Exception as e:
+			print(f"WARNING: Failed to decrypt {env_var_name}: {e}")
+			print(f"WARNING: Falling back to plain-text credential")
+	
+	# Fall back to plain-text
+	return os.environ.get(env_var_name, default)
+
+# Razorpay Configuration - Load credentials securely
+# Razorpay Configuration - Load credentials securely
+# SECURITY NOTE: In production, use AWS Secrets Manager, Azure Key Vault, or HashiCorp Vault
+# For encrypted credentials, set ENCRYPTED_RAZORPAY_KEY_ID, ENCRYPTED_RAZORPAY_KEY_SECRET, etc.
+RAZORPAY_KEY_ID = get_decrypted_credential('RAZORPAY_KEY_ID', '')
+RAZORPAY_KEY_SECRET = get_decrypted_credential('RAZORPAY_KEY_SECRET', '')
+RAZORPAY_WEBHOOK_SECRET = get_decrypted_credential('RAZORPAY_WEBHOOK_SECRET', '')
+
+# Validate that credentials are not accidentally logged or exposed
+if RAZORPAY_KEY_SECRET and os.environ.get("WERKZEUG_RUN_MAIN") == "true":
+	print("Razorpay credentials loaded (key_id: {}..., secret: [REDACTED])".format(RAZORPAY_KEY_ID[:10] if RAZORPAY_KEY_ID else 'none'))
 
 # Initialize Razorpay client (only if credentials are provided)
 razorpay_client = None
@@ -925,6 +996,138 @@ class SubscriptionInactiveError(Exception):
         self.org_id = org_id
         self.subscription_status = subscription_status
         super().__init__(f"{message}: org_id={org_id}, status={subscription_status}")
+
+class SubscriptionStateMachine:
+    """State machine for subscription status transitions.
+    
+    Defines valid subscription statuses and allowed transitions between them.
+    This ensures business logic integrity and prevents invalid state changes.
+    """
+    # All valid subscription statuses
+    STATUS_TRIAL = 'trial'
+    STATUS_CREATED = 'created'
+    STATUS_AUTHENTICATED = 'authenticated'
+    STATUS_ACTIVE = 'active'
+    STATUS_PAUSED = 'paused'
+    STATUS_PENDING_CANCELLATION = 'pending_cancellation'
+    STATUS_HALTED = 'halted'
+    STATUS_CANCELLED = 'cancelled'
+    STATUS_EXPIRED = 'expired'
+    STATUS_COMPLETED = 'completed'
+    STATUS_ABANDONED = 'abandoned'
+    STATUS_PAST_DUE = 'past_due'
+    
+    # Valid transitions: {from_status: [to_status1, to_status2, ...]}
+    VALID_TRANSITIONS = {
+        STATUS_TRIAL: [STATUS_ACTIVE, STATUS_CANCELLED, STATUS_EXPIRED],
+        STATUS_CREATED: [STATUS_AUTHENTICATED, STATUS_ACTIVE, STATUS_ABANDONED, STATUS_CANCELLED],
+        STATUS_AUTHENTICATED: [STATUS_ACTIVE, STATUS_CANCELLED, STATUS_ABANDONED],
+        STATUS_ACTIVE: [STATUS_PAUSED, STATUS_CANCELLED, STATUS_HALTED, STATUS_COMPLETED, STATUS_PENDING_CANCELLATION, STATUS_PAST_DUE],
+        STATUS_PAUSED: [STATUS_ACTIVE, STATUS_CANCELLED],
+        STATUS_PENDING_CANCELLATION: [STATUS_CANCELLED, STATUS_ACTIVE],  # Can reactivate before cancellation
+        STATUS_HALTED: [STATUS_CANCELLED, STATUS_ACTIVE],  # Can be reactivated
+        STATUS_PAST_DUE: [STATUS_ACTIVE, STATUS_CANCELLED, STATUS_HALTED],
+        # Terminal states - no transitions allowed
+        STATUS_CANCELLED: [],
+        STATUS_EXPIRED: [],
+        STATUS_COMPLETED: [],
+        STATUS_ABANDONED: []
+    }
+    
+    # Terminal states that cannot transition to any other state
+    TERMINAL_STATES = {STATUS_CANCELLED, STATUS_EXPIRED, STATUS_COMPLETED, STATUS_ABANDONED}
+    
+    @classmethod
+    def is_valid_transition(cls, current_status, new_status):
+        """Check if a transition from current_status to new_status is valid.
+        
+        Args:
+            current_status: Current subscription status
+            new_status: Desired new subscription status
+            
+        Returns:
+            bool: True if transition is valid, False otherwise
+        """
+        if not current_status or not new_status:
+            return False
+        
+        # Same status is always valid (no-op)
+        if current_status == new_status:
+            return True
+        
+        # Check if current status is in our transition map
+        if current_status not in cls.VALID_TRANSITIONS:
+            # Unknown status - allow transition but log warning
+            return True  # Permissive for backward compatibility
+        
+        # Check if transition is allowed
+        allowed_transitions = cls.VALID_TRANSITIONS.get(current_status, [])
+        return new_status in allowed_transitions
+    
+    @classmethod
+    def get_allowed_transitions(cls, current_status):
+        """Get list of allowed transitions from current status.
+        
+        Args:
+            current_status: Current subscription status
+            
+        Returns:
+            list: List of allowed status values
+        """
+        if not current_status:
+            return []
+        
+        return cls.VALID_TRANSITIONS.get(current_status, [])
+    
+    @classmethod
+    def is_terminal_state(cls, status):
+        """Check if a status is a terminal state (cannot transition).
+        
+        Args:
+            status: Subscription status to check
+            
+        Returns:
+            bool: True if status is terminal, False otherwise
+        """
+        return status in cls.TERMINAL_STATES
+
+def validate_subscription_transition(org_id, current_status, new_status, user_id=None, context=None):
+    """Validate and log subscription status transition.
+    
+    Args:
+        org_id: Organization ID
+        current_status: Current subscription status
+        new_status: Desired new subscription status
+        user_id: User ID making the change (optional)
+        context: Additional context for logging (optional dict)
+        
+    Returns:
+        tuple: (is_valid: bool, error_message: str or None)
+        
+    Raises:
+        ValueError: If transition is invalid (for strict enforcement)
+    """
+    if not SubscriptionStateMachine.is_valid_transition(current_status, new_status):
+        # Log security incident
+        try:
+            details = json.dumps({
+                "org_id": org_id,
+                "current_status": current_status,
+                "attempted_status": new_status,
+                "allowed_transitions": SubscriptionStateMachine.get_allowed_transitions(current_status),
+                "context": context or {}
+            })
+            execute_primary_query(
+                "INSERT INTO audit_logs (org_id, user_id, action, details) VALUES (?, ?, ?, ?)",
+                (org_id, user_id, 'subscription_invalid_transition_attempt', details)
+            )
+        except Exception:
+            pass
+        
+        error_msg = f"Invalid subscription transition: {current_status} -> {new_status}. Allowed transitions: {SubscriptionStateMachine.get_allowed_transitions(current_status)}"
+        return False, error_msg
+    
+    return True, None
 
 
 # --- Database Management ---
@@ -1320,7 +1523,8 @@ def initialize_primary_database():
                     status VARCHAR(50) NOT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE,
-                    INDEX idx_billing_org_id (org_id)
+                    INDEX idx_billing_org_id (org_id),
+                    UNIQUE KEY idx_billing_payment_id (razorpay_payment_id)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
                 """
             )
@@ -1440,7 +1644,7 @@ def initialize_primary_database():
                 CREATE TABLE IF NOT EXISTS billing_transactions (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     org_id INTEGER NOT NULL,
-                    razorpay_payment_id TEXT,
+                    razorpay_payment_id TEXT UNIQUE,
                     amount REAL NOT NULL,
                     status TEXT NOT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -1515,6 +1719,99 @@ def initialize_primary_database():
         print(f"Error initializing primary MySQL database: {e}")
         raise
 
+def migrate_schema_versioning():
+    """Create schema_migrations table to track which migrations have been run."""
+    try:
+        conn = get_db_connection(MYSQL_PRIMARY_DATABASE)
+        cursor = conn.cursor()
+        
+        # Create schema_migrations table if it doesn't exist
+        if DB_TYPE.lower() == "mysql":
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS schema_migrations (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    migration_name VARCHAR(255) UNIQUE NOT NULL,
+                    executed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    INDEX idx_migration_name (migration_name)
+                )
+            """)
+        else:
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS schema_migrations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    migration_name TEXT UNIQUE NOT NULL,
+                    executed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_migration_name ON schema_migrations(migration_name)")
+        
+        conn.commit()
+        conn.close()
+        print("Schema migrations table initialized successfully")
+        
+    except Exception as e:
+        print(f"Error creating schema_migrations table: {e}")
+        # Don't raise - allow application to continue
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+def has_migration_run(migration_name):
+    """Check if a migration has already been run."""
+    try:
+        conn = get_db_connection(MYSQL_PRIMARY_DATABASE)
+        cursor = conn.cursor()
+        
+        if DB_TYPE.lower() == "mysql":
+            cursor.execute("SELECT COUNT(*) FROM schema_migrations WHERE migration_name = %s", (migration_name,))
+        else:
+            cursor.execute("SELECT COUNT(*) FROM schema_migrations WHERE migration_name = ?", (migration_name,))
+        
+        result = cursor.fetchone()
+        count = result[0] if result else 0
+        
+        conn.close()
+        return count > 0
+        
+    except Exception as e:
+        # If table doesn't exist or query fails, assume migration hasn't run
+        print(f"Warning: Could not check migration status for '{migration_name}': {e}")
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return False
+
+def mark_migration_complete(migration_name):
+    """Mark a migration as complete."""
+    try:
+        conn = get_db_connection(MYSQL_PRIMARY_DATABASE)
+        cursor = conn.cursor()
+        
+        if DB_TYPE.lower() == "mysql":
+            cursor.execute("""
+                INSERT INTO schema_migrations (migration_name) 
+                VALUES (%s)
+                ON DUPLICATE KEY UPDATE migration_name = VALUES(migration_name)
+            """, (migration_name,))
+        else:
+            cursor.execute("""
+                INSERT OR IGNORE INTO schema_migrations (migration_name) 
+                VALUES (?)
+            """, (migration_name,))
+        
+        conn.commit()
+        conn.close()
+        print(f"Migration '{migration_name}' marked as complete")
+        
+    except Exception as e:
+        print(f"Warning: Could not mark migration '{migration_name}' as complete: {e}")
+        try:
+            conn.close()
+        except Exception:
+            pass
+
 def seed_plan_limits():
     """Seed the plan limits table with default values for each pricing plan."""
     try:
@@ -1560,9 +1857,9 @@ def seed_plan_limits():
                 INSERT INTO plan_limits (plan_type, max_projects, max_org_admins, max_users, max_files_per_project, max_ai_prompts_per_week)
                 VALUES (?, ?, ?, ?, ?, ?)
             """
-            cursor.execute(insert_stmt, ('basic', 1, 1, 5, 20, 10))
-            cursor.execute(insert_stmt, ('si_plus', 10, 2, 10, 100, 100))
-            cursor.execute(insert_stmt, ('plus', 10, 2, 10, 100, 100))
+            cursor.execute(insert_stmt, ('basic', 1, 5, 5, 20, 10))
+            cursor.execute(insert_stmt, ('si_plus', 10, 10, 10, 100, 100))
+            cursor.execute(insert_stmt, ('plus', 10, 10, 10, 100, 100))
             cursor.execute(insert_stmt, ('pro', 999999, 999999, 999999, 999999, 999999))
             
             conn.commit()
@@ -1577,6 +1874,9 @@ def seed_plan_limits():
         raise
 
 def migrate_plan_limits_to_new_pricing():
+    migration_name = "migrate_plan_limits_to_new_pricing"
+    if has_migration_run(migration_name):
+        return
     """Update existing plan_limits records to match new pricing structure without requiring database reset."""
     try:
         conn = get_db_connection(MYSQL_PRIMARY_DATABASE)
@@ -1596,7 +1896,7 @@ def migrate_plan_limits_to_new_pricing():
         if result and max_users_basic == 2:
             print("Migrating plan_limits to new pricing structure...")
             
-            cursor.execute("UPDATE plan_limits SET max_users=5, max_org_admins=1 WHERE plan_type=%s" if DB_TYPE.lower() == "mysql" else "UPDATE plan_limits SET max_users=5, max_org_admins=1 WHERE plan_type='basic'", ('basic',) if DB_TYPE.lower() == "mysql" else ())
+            cursor.execute("UPDATE plan_limits SET max_users=5, max_org_admins=5 WHERE plan_type=%s" if DB_TYPE.lower() == "mysql" else "UPDATE plan_limits SET max_users=5, max_org_admins=5 WHERE plan_type='basic'", ('basic',) if DB_TYPE.lower() == "mysql" else ())
             print("Updated Basic plan limits: 5 users, 5 org_admins")
             
             cursor.execute("UPDATE plan_limits SET max_org_admins=999999 WHERE plan_type=%s" if DB_TYPE.lower() == "mysql" else "UPDATE plan_limits SET max_org_admins=999999 WHERE plan_type='pro'", ('pro',) if DB_TYPE.lower() == "mysql" else ())
@@ -1621,8 +1921,10 @@ def migrate_plan_limits_to_new_pricing():
             
             conn.commit()
             print("Plan limits migration completed successfully")
+            mark_migration_complete(migration_name)
         else:
             print("Plan limits already migrated, skipping migration")
+            mark_migration_complete(migration_name)
         
         conn.close()
         
@@ -1637,6 +1939,10 @@ def migrate_plan_limits_to_new_pricing():
 
 def migrate_users_table_for_auth_features():
     """Ensure users table has OTP and reset token columns plus supporting index."""
+    migration_name = "migrate_users_table_for_auth_features"
+    if has_migration_run(migration_name):
+        return
+    
     try:
         conn = get_db_connection(MYSQL_PRIMARY_DATABASE)
         cursor = conn.cursor(dictionary=True) if DB_TYPE.lower() == "mysql" else conn.cursor()
@@ -1678,6 +1984,7 @@ def migrate_users_table_for_auth_features():
 
         if migrations:
             print("Users table migration completed successfully.")
+            mark_migration_complete(migration_name)
         else:
             print("Users table already up to date; no migration needed.")
 
@@ -1699,6 +2006,10 @@ def migrate_users_table_for_auth_features():
 
 def migrate_organizations_table_for_tour():
     """Ensure organizations table has tour_seen column."""
+    migration_name = "migrate_organizations_table_for_tour"
+    if has_migration_run(migration_name):
+        return
+    
     conn = None
     cursor = None
     try:
@@ -1725,8 +2036,10 @@ def migrate_organizations_table_for_tour():
                 cursor.execute("ALTER TABLE organizations ADD COLUMN tour_seen BOOLEAN DEFAULT 0")
             conn.commit()
             print("Organizations table migration completed successfully.")
+            mark_migration_complete(migration_name)
         else:
             print("Organizations table already up to date; no migration needed.")
+            mark_migration_complete(migration_name)
 
     except MySQLError as exc:
         print(f"Warning: Organizations table migration failed: {exc}")
@@ -1753,6 +2066,184 @@ def migrate_organizations_table_for_tour():
                 conn.close()
             except Exception:
                 pass
+
+def migrate_billing_transactions_unique_constraint():
+    """Ensure billing_transactions table has UNIQUE constraint on razorpay_payment_id."""
+    migration_name = "migrate_billing_transactions_unique_constraint"
+    if has_migration_run(migration_name):
+        return
+    
+    conn = None
+    cursor = None
+    try:
+        conn = get_primary_db_connection()
+        cursor = conn.cursor(buffered=True)
+
+        # Check if billing_transactions table exists first
+        if DB_TYPE.lower() == "mysql":
+            cursor.execute("SHOW TABLES LIKE 'billing_transactions'")
+            table_exists = cursor.fetchone() is not None
+        else:
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='billing_transactions'")
+            table_exists = cursor.fetchone() is not None
+
+        if not table_exists:
+            print("Warning: billing_transactions table does not exist, skipping migration.")
+            return
+
+        # Check if unique constraint/index already exists
+        constraint_exists = False
+        if DB_TYPE.lower() == "mysql":
+            cursor.execute("""
+                SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS 
+                WHERE TABLE_SCHEMA = DATABASE() 
+                AND TABLE_NAME = 'billing_transactions' 
+                AND INDEX_NAME = 'idx_billing_payment_id' 
+                AND NON_UNIQUE = 0
+            """)
+            constraint_exists = cursor.fetchone()[0] > 0
+        else:
+            # SQLite: Check if unique index exists
+            cursor.execute("SELECT sql FROM sqlite_master WHERE type='index' AND name='idx_billing_payment_id'")
+            index_info = cursor.fetchone()
+            if index_info and 'UNIQUE' in (index_info[0] or '').upper():
+                constraint_exists = True
+
+        if not constraint_exists:
+            print("Migrating billing_transactions table: Adding UNIQUE constraint on razorpay_payment_id...")
+            if DB_TYPE.lower() == "mysql":
+                # Check for existing duplicates before adding constraint
+                cursor.execute("""
+                    SELECT razorpay_payment_id, COUNT(*) as cnt 
+                    FROM billing_transactions 
+                    WHERE razorpay_payment_id IS NOT NULL 
+                    GROUP BY razorpay_payment_id 
+                    HAVING cnt > 1
+                """)
+                duplicates = cursor.fetchall()
+                if duplicates:
+                    print(f"Warning: Found {len(duplicates)} duplicate payment IDs. Keeping first occurrence of each.")
+                    # Keep the first occurrence (lowest id) of each duplicate
+                    for payment_id, count in duplicates:
+                        cursor.execute("""
+                            DELETE t1 FROM billing_transactions t1
+                            INNER JOIN billing_transactions t2 
+                            WHERE t1.razorpay_payment_id = t2.razorpay_payment_id
+                            AND t1.razorpay_payment_id = %s
+                            AND t1.id > t2.id
+                        """, (payment_id,))
+                    conn.commit()
+                
+                cursor.execute("CREATE UNIQUE INDEX idx_billing_payment_id ON billing_transactions(razorpay_payment_id)")
+            else:
+                # SQLite: Create unique index
+                cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_billing_payment_id ON billing_transactions(razorpay_payment_id)")
+            
+            conn.commit()
+            print("billing_transactions table migration completed successfully.")
+            mark_migration_complete(migration_name)
+        else:
+            print("billing_transactions table already has UNIQUE constraint; no migration needed.")
+            mark_migration_complete(migration_name)
+
+    except MySQLError as exc:
+        print(f"Warning: billing_transactions table migration failed: {exc}")
+        try:
+            if conn:
+                conn.rollback()
+        except Exception:
+            pass
+    except Exception as exc:
+        print(f"Warning: billing_transactions table migration encountered unexpected error: {exc}")
+        try:
+            if conn:
+                conn.rollback()
+        except Exception:
+            pass
+    finally:
+        if cursor:
+            try:
+                cursor.close()
+            except Exception:
+                pass
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+def migrate_billing_transactions_retry_tracking():
+    """Add retry_attempts and last_retry_at columns to billing_transactions table."""
+    migration_name = "migrate_billing_transactions_retry_tracking"
+    if has_migration_run(migration_name):
+        return
+    
+    conn = None
+    cursor = None
+    try:
+        conn = get_primary_db_connection()
+        cursor = conn.cursor(buffered=True)
+
+        # Check if billing_transactions table exists first
+        if DB_TYPE.lower() == "mysql":
+            cursor.execute("SHOW TABLES LIKE 'billing_transactions'")
+            table_exists = cursor.fetchone() is not None
+        else:
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='billing_transactions'")
+            table_exists = cursor.fetchone() is not None
+
+        if not table_exists:
+            print("Warning: billing_transactions table does not exist, skipping migration.")
+            return
+
+        # Check existing columns
+        if DB_TYPE.lower() == "mysql":
+            cursor.execute("SHOW COLUMNS FROM billing_transactions")
+            columns = [row[0] for row in cursor.fetchall()]
+        else:
+            cursor.execute("PRAGMA table_info(billing_transactions)")
+            columns = [row[1] for row in cursor.fetchall()]
+
+        # Add retry_attempts column if it doesn't exist
+        if 'retry_attempts' not in columns:
+            print("Migrating billing_transactions table: Adding retry_attempts column...")
+            if DB_TYPE.lower() == "mysql":
+                cursor.execute("ALTER TABLE billing_transactions ADD COLUMN retry_attempts INT DEFAULT 0")
+            else:
+                cursor.execute("ALTER TABLE billing_transactions ADD COLUMN retry_attempts INTEGER DEFAULT 0")
+            conn.commit()
+            print("✓ Added retry_attempts column")
+
+        # Add last_retry_at column if it doesn't exist
+        if 'last_retry_at' not in columns:
+            print("Migrating billing_transactions table: Adding last_retry_at column...")
+            if DB_TYPE.lower() == "mysql":
+                cursor.execute("ALTER TABLE billing_transactions ADD COLUMN last_retry_at TIMESTAMP NULL")
+            else:
+                cursor.execute("ALTER TABLE billing_transactions ADD COLUMN last_retry_at TIMESTAMP")
+            conn.commit()
+            print("✓ Added last_retry_at column")
+        
+        # Mark migration as complete if any columns were added, or if columns already exist
+        if 'retry_attempts' in columns and 'last_retry_at' in columns:
+            mark_migration_complete(migration_name)
+        elif 'retry_attempts' not in columns or 'last_retry_at' not in columns:
+            # Columns were added, mark as complete
+            mark_migration_complete(migration_name)
+
+    except MySQLError as e:
+        print(f"Error migrating billing_transactions retry tracking: {e}")
+        if conn:
+            conn.rollback()
+    except Exception as e:
+        print(f"Unexpected error in migrate_billing_transactions_retry_tracking: {e}")
+        if conn:
+            conn.rollback()
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 def get_db_connection(database_name=None):
     """Return a connection to the configured primary database."""
@@ -2211,7 +2702,7 @@ def resolve_tenant():
                 # First, check if there is ANY active/valid subscription
                 # This prevents a recent "abandoned" upgrade attempt from blocking an existing "active" plan
                 active_status_query = """
-                    SELECT status FROM subscriptions 
+                    SELECT status, plan_type FROM subscriptions 
                     WHERE org_id = ? 
                     AND status IN ('active', 'trial', 'authenticated', 'created', 'paused', 'pending_cancellation')
                     ORDER BY id DESC LIMIT 1
@@ -2225,22 +2716,33 @@ def resolve_tenant():
                 # If no active plan found, get the absolute latest status (which might be abandoned, expired, cancelled)
                 if not subscription_result_raw:
                     subscription_result_raw = execute_primary_query(
-                        "SELECT status FROM subscriptions WHERE org_id = ? ORDER BY id DESC LIMIT 1",
+                        "SELECT status, plan_type FROM subscriptions WHERE org_id = ? ORDER BY id DESC LIMIT 1",
                         params=(g.org_id,),
                         fetch_one=True
                     )
                 
                 subscription_status = None
+                fresh_plan_type = None
                 if subscription_result_raw:
                     if isinstance(subscription_result_raw, dict):
                         subscription_status = subscription_result_raw.get('status')
+                        fresh_plan_type = subscription_result_raw.get('plan_type')
                     elif hasattr(subscription_result_raw, "keys"):
                         subscription_status = dict(subscription_result_raw).get('status')
+                        fresh_plan_type = dict(subscription_result_raw).get('plan_type')
                     else:
-                        subscription_status = subscription_result_raw[0] if len(subscription_result_raw) > 0 else None
+                        if len(subscription_result_raw) >= 2:
+                            subscription_status = subscription_result_raw[0]
+                            fresh_plan_type = subscription_result_raw[1]
+                        elif len(subscription_result_raw) > 0:
+                            # Fallback if query didn't return 2 columns for some reason (unlikely with this change)
+                            subscription_status = subscription_result_raw[0]
                 
                 if subscription_status is not None:
                     g.subscription_status = subscription_status
+                    if fresh_plan_type:
+                        g.plan = fresh_plan_type
+                        # print(f"[MIDDLEWARE] Updated g.plan to {g.plan} from DB")
                     
                     # Set subscription active flag with enhanced status checks
                     ALLOWED_SUBSCRIPTION_STATUSES = ['active', 'trial', 'authenticated', 'created', 'paused', 'pending_cancellation']
@@ -2523,6 +3025,41 @@ def role_required(allowed_roles):
         
         return wrapper
     return decorator
+
+
+def require_https_payment(fn):
+    """Decorator to enforce HTTPS on payment endpoints regardless of FORCE_HTTPS setting.
+    
+    This decorator ensures PCI-DSS compliance by requiring HTTPS for all payment-related
+    operations. It checks the request scheme and X-Forwarded-Proto header.
+    
+    Localhost and 127.0.0.1 are exempted for local development.
+    
+    Args:
+        fn: The route function to protect
+        
+    Returns:
+        function: Wrapped function with HTTPS enforcement
+    """
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        # Allow localhost for development
+        host = request.host or ''
+        if host.startswith('localhost') or host.startswith('127.0.0.1'):
+            return fn(*args, **kwargs)
+        
+        # Check if request is over HTTPS
+        scheme = request.headers.get('X-Forwarded-Proto', request.scheme)
+        if scheme != 'https':
+            return jsonify({
+                'status': 'error',
+                'error_code': 'HTTPS_REQUIRED',
+                'message': 'This endpoint requires HTTPS connection for security compliance'
+            }), 403
+        
+        return fn(*args, **kwargs)
+    
+    return wrapper
 
 
 def subscription_required(fn):
@@ -5622,7 +6159,7 @@ def create_razorpay_plans():
 			print(f"[RAZORPAY] Creating plan for {plan_type} using Razorpay API...")
 			print(f"[RAZORPAY] Plan data: {plan_data}")
 			print(f"[RAZORPAY] API endpoint: POST /v1/plans")
-			rz_plan = razorpay_client.plan.create(plan_data)
+			rz_plan = razorpay_client.plan.create(plan_data, timeout=10)
 			plan_id = rz_plan.get('id')
 			print(f"[RAZORPAY] Plan created successfully: {plan_id}")
 			RAZORPAY_PLAN_IDS[plan_type] = plan_id
@@ -5683,6 +6220,8 @@ def create_razorpay_plans():
 
 
 @app.route('/api/razorpay/subscription/create', methods=['POST'])
+@require_https_payment
+@limiter.limit("5 per minute", key_func=get_user_id_for_rate_limit)
 @role_required([ROLE_SUPER_ADMIN, ROLE_ORG_ADMIN])
 def create_razorpay_subscription():
 	"""Create a Razorpay subscription for organization upgrade."""
@@ -5698,6 +6237,12 @@ def create_razorpay_subscription():
 
 	if plan_type not in ['basic', 'si_plus', 'plus', 'pro']:
 		return jsonify({"status": "error", "message": "Invalid plan type"}), 400
+	
+	# Validate user_count range
+	if user_count < 1:
+		return jsonify({"status": "error", "message": "User count must be at least 1"}), 400
+	if user_count > MAX_USER_COUNT:
+		return jsonify({"status": "error", "message": f"User count cannot exceed {MAX_USER_COUNT}"}), 400
 
 	org_id = data.get('org_id') if getattr(g, 'role', None) == ROLE_SUPER_ADMIN else getattr(g, 'org_id', None)
 	if not org_id:
@@ -5742,7 +6287,7 @@ def create_razorpay_subscription():
 		}
 	}
 	try:
-		rz_sub = razorpay_client.subscription.create(subscription_data)
+		rz_sub = razorpay_client.subscription.create(subscription_data, timeout=10)
 		sub_id = rz_sub.get('id')
 		
 		# Create addons for extra users if needed
@@ -5757,7 +6302,7 @@ def create_razorpay_subscription():
 					},
 					'quantity': extra_users
 				}
-				razorpay_client.subscription.createAddon(sub_id, addon_data)
+				razorpay_client.subscription.createAddon(sub_id, addon_data, timeout=10)
 			except Exception as e:
 				print(f"Error creating addon for subscription {sub_id}: {e}")
 				# Continue even if addon creation fails
@@ -5810,6 +6355,8 @@ def create_razorpay_subscription():
 
 
 @app.route('/api/razorpay/subscription/verify', methods=['POST'])
+@require_https_payment
+@limiter.limit("10 per minute", key_func=get_user_id_for_rate_limit)
 @role_required([ROLE_SUPER_ADMIN, ROLE_ORG_ADMIN])
 def verify_razorpay_subscription():
 	"""Verify payment signature after successful Razorpay Checkout and activate subscription."""
@@ -5836,8 +6383,10 @@ def verify_razorpay_subscription():
 	try:
 		subscription = razorpay_client.subscription.fetch(rz_sub_id)
 		payment = razorpay_client.payment.fetch(rz_payment_id)
-		org_row = execute_primary_query("SELECT org_id FROM subscriptions WHERE razorpay_subscription_id = ?", (rz_sub_id,), fetch_one=True)
-		org_id = org_row[0] if org_row else getattr(g, 'org_id', None)
+		sub_row = execute_primary_query("SELECT org_id, plan_type, billing_cycle FROM subscriptions WHERE razorpay_subscription_id = ?", (rz_sub_id,), fetch_one=True)
+		if not sub_row:
+			return jsonify({"status": "error", "message": "Subscription not found"}), 404
+		org_id, plan_type, billing_cycle = sub_row
 		# Enforce org ownership unless SuperAdmin
 		if getattr(g, 'role', None) != ROLE_SUPER_ADMIN and org_id != getattr(g, 'org_id', None):
 			try:
@@ -5846,35 +6395,252 @@ def verify_razorpay_subscription():
 			except Exception:
 				pass
 			return jsonify({"status": "error", "message": "Forbidden"}), 403
-		# Activate subscription
+		
+		# Get current admin count to calculate expected amount (MUST be before fraud detection)
+		try:
+			admin_count_row = execute_primary_query("SELECT COUNT(*) FROM users WHERE org_id = ? AND role IN ('org_admin', 'super_admin')", (org_id,), fetch_one=True)
+			user_count = admin_count_row[0] if admin_count_row else 1
+		except Exception:
+			user_count = 1
+		
+		expected_amount_paise = calculate_subscription_amount(plan_type, user_count, billing_cycle or 'monthly')
+		expected_amount_rupees = expected_amount_paise / 100.0
+		
+		# Verify payment amount matches expected amount
+		actual_amount_rupees = (payment.get('amount', 0) or 0) / 100.0
+		
+		# Fraud detection check
+		try:
+			from utils.fraud_detection import FraudDetector
+			fraud_analysis = FraudDetector.analyze_payment(
+				org_id=org_id,
+				user_id=getattr(g, 'user_id', None),
+				payment_id=rz_payment_id,
+				expected_amount=expected_amount_rupees,
+				actual_amount=actual_amount_rupees
+			)
+			
+			# Log fraud analysis
+			if fraud_analysis["fraud_score"] > 0:
+				try:
+					details = json.dumps({
+						"fraud_score": fraud_analysis["fraud_score"],
+						"risk_level": fraud_analysis["risk_level"],
+						"risk_factors": fraud_analysis["risk_factors"],
+						"payment_id": rz_payment_id,
+						"org_id": org_id
+					})
+					execute_primary_query(
+						"INSERT INTO audit_logs (org_id, user_id, action, details) VALUES (?, ?, ?, ?)",
+						(org_id, getattr(g, 'user_id', None), 'fraud_analysis', details)
+					)
+				except Exception:
+					pass
+			
+			# Block high-risk payments
+			if fraud_analysis["recommendation"] == "block":
+				return jsonify({
+					"status": "error",
+					"message": "Payment flagged for review due to security concerns",
+					"error_code": "FRAUD_DETECTED"
+				}), 403
+		except Exception as e:
+			print(f"[FRAUD] Fraud detection error: {e}")
+			# Continue with payment if fraud detection fails
+		
+		# Allow 1 rupee tolerance for rounding differences
+		if abs(actual_amount_rupees - expected_amount_rupees) > 1.0:
+			# Log security incident - amount mismatch
+			try:
+				details = json.dumps({
+					"org_id": org_id,
+					"subscription_id": rz_sub_id,
+					"payment_id": rz_payment_id,
+					"expected_amount": expected_amount_rupees,
+					"actual_amount": actual_amount_rupees,
+					"plan_type": plan_type,
+					"user_count": user_count,
+					"billing_cycle": billing_cycle
+				})
+				execute_primary_query("INSERT INTO audit_logs (org_id, user_id, action, details) VALUES (?, ?, ?, ?)", (org_id, getattr(g, 'user_id', None), 'payment_amount_mismatch_security_incident', details))
+			except Exception:
+				pass
+			return jsonify({"status": "error", "message": "Payment amount verification failed"}), 400
+		
+		# Activate subscription and record payment atomically
 		start_at = subscription.get('start_at')
 		start_date_val = datetime.fromtimestamp(start_at).strftime('%Y-%m-%d') if start_at else datetime.now().strftime('%Y-%m-%d')
-		execute_primary_query(
-			"UPDATE subscriptions SET status = 'active', start_date = ?, end_date = NULL WHERE org_id = ?",
-			(start_date_val, org_id)
+		
+		# Get current subscription status for validation
+		current_sub = execute_primary_query("SELECT status FROM subscriptions WHERE org_id = ? ORDER BY id DESC LIMIT 1", (org_id,), fetch_one=True)
+		current_status = current_sub[0] if current_sub else None
+		
+		# Validate transition to 'active'
+		is_valid, error_msg = validate_subscription_transition(org_id, current_status, 'active', user_id=getattr(g, 'user_id', None), context={"subscription_id": rz_sub_id, "payment_id": rz_payment_id})
+		if not is_valid:
+			try:
+				details = json.dumps({"org_id": org_id, "current_status": current_status, "attempted_status": "active", "error": error_msg, "subscription_id": rz_sub_id})
+				execute_primary_query("INSERT INTO audit_logs (org_id, user_id, action, details) VALUES (?, ?, ?, ?)", (org_id, getattr(g, 'user_id', None), 'subscription_invalid_transition_blocked', details))
+			except Exception:
+				pass
+			return jsonify({"status": "error", "message": error_msg}), 400
+		
+		# Check if payment already exists (idempotency check)
+		existing_payment = execute_primary_query(
+			"SELECT id FROM billing_transactions WHERE razorpay_payment_id = ?",
+			(rz_payment_id,),
+			fetch_one=True
 		)
-		amount_rupees = (payment.get('amount', 0) or 0) / 100.0
-		execute_primary_query(
-			"INSERT INTO billing_transactions (org_id, razorpay_payment_id, amount, status) VALUES (?, ?, ?, ?)",
-			(org_id, rz_payment_id, amount_rupees, 'success')
-		)
+		
+		if existing_payment:
+			# Payment already recorded - just update subscription status (idempotent)
+			execute_primary_query(
+				"UPDATE subscriptions SET status = 'active', start_date = ?, end_date = NULL WHERE org_id = ?",
+				(start_date_val, org_id)
+			)
+			try:
+				details = json.dumps({"org_id": org_id, "payment_id": rz_payment_id, "reason": "duplicate_payment_idempotent"})
+				execute_primary_query("INSERT INTO audit_logs (org_id, user_id, action, details) VALUES (?, ?, ?, ?)", (org_id, getattr(g, 'user_id', None), 'payment_duplicate_idempotent', details))
+			except Exception:
+				pass
+		else:
+			# Use transaction to ensure atomicity
+			try:
+				execute_primary_transaction([
+					{
+						"query": "UPDATE subscriptions SET status = 'active', start_date = ?, end_date = NULL WHERE org_id = ?",
+						"params": (start_date_val, org_id)
+					},
+					{
+						"query": "INSERT INTO billing_transactions (org_id, razorpay_payment_id, amount, status) VALUES (?, ?, ?, ?)",
+						"params": (org_id, rz_payment_id, actual_amount_rupees, 'success')
+					}
+				])
+			except mysql.connector.IntegrityError:
+				# Duplicate payment ID (race condition) - check again and handle gracefully
+				existing_payment = execute_primary_query(
+					"SELECT id FROM billing_transactions WHERE razorpay_payment_id = ?",
+					(rz_payment_id,),
+					fetch_one=True
+				)
+				if existing_payment:
+					# Payment was inserted by another request - just update subscription
+					execute_primary_query(
+						"UPDATE subscriptions SET status = 'active', start_date = ?, end_date = NULL WHERE org_id = ?",
+						(start_date_val, org_id)
+					)
+					try:
+						details = json.dumps({"org_id": org_id, "payment_id": rz_payment_id, "reason": "duplicate_payment_race_condition"})
+						execute_primary_query("INSERT INTO audit_logs (org_id, user_id, action, details) VALUES (?, ?, ?, ?)", (org_id, getattr(g, 'user_id', None), 'payment_duplicate_race_condition', details))
+					except Exception:
+						pass
+				else:
+					# Different integrity error - re-raise
+					raise
+		
 		invalidate_billing_metrics_cache()
 		try:
-			details = json.dumps({"org_id": org_id, "subscription_id": rz_sub_id, "payment_id": rz_payment_id, "amount": amount_rupees})
+			details = json.dumps({"org_id": org_id, "subscription_id": rz_sub_id, "payment_id": rz_payment_id, "amount": actual_amount_rupees, "expected_amount": expected_amount_rupees})
 			execute_primary_query("INSERT INTO audit_logs (org_id, user_id, action, details) VALUES (?, ?, ?, ?)", (org_id, getattr(g, 'user_id', None), 'subscription_payment_verified', details))
 		except Exception:
 			pass
+		
+		# Send email notifications
+		try:
+			user_email = getattr(g, 'email', None)
+			user_name = getattr(g, 'name', None)
+			if user_email:
+				# Send payment success email
+				send_payment_success_email(
+					to_email=user_email,
+					payment_id=rz_payment_id,
+					amount=actual_amount_rupees,
+					plan_type=plan_type,
+					billing_cycle=billing_cycle or 'monthly',
+					payment_date=start_date_val,
+					user_name=user_name,
+					org_id=org_id,
+					user_id=getattr(g, 'user_id', None)
+				)
+				# Send subscription activated email
+				next_billing = None
+				if billing_cycle == 'yearly':
+					start_dt = datetime.strptime(start_date_val, '%Y-%m-%d')
+					next_billing = (start_dt + timedelta(days=365)).strftime('%Y-%m-%d')
+				elif billing_cycle == 'monthly':
+					start_dt = datetime.strptime(start_date_val, '%Y-%m-%d')
+					next_billing = (start_dt + timedelta(days=30)).strftime('%Y-%m-%d')
+				
+				send_subscription_activated_email(
+					to_email=user_email,
+					plan_type=plan_type,
+					billing_cycle=billing_cycle or 'monthly',
+					start_date=start_date_val,
+					next_billing_date=next_billing,
+					user_name=user_name,
+					org_id=org_id,
+					user_id=getattr(g, 'user_id', None)
+				)
+		except Exception as e:
+			print(f"[EMAIL] Failed to send payment notification emails: {e}")
+			# Don't fail the payment if email fails
+		
 		# Invalidate usage cache
 		try:
 			ORG_USAGE_CACHE.pop(org_id, None)
 		except Exception:
 			pass
 		return jsonify({"status": "success", "message": "Payment verified successfully. Your subscription is now active!", "subscription_status": "active"})
+	except razorpay.errors.BadRequestError as e:
+		# Log Razorpay API error
+		try:
+			details = json.dumps({
+				"error_type": "razorpay_bad_request",
+				"error": str(e),
+				"subscription_id": rz_sub_id,
+				"payment_id": rz_payment_id
+			})
+			execute_primary_query("INSERT INTO audit_logs (org_id, user_id, action, details) VALUES (?, ?, ?, ?)", (getattr(g, 'org_id', None), getattr(g, 'user_id', None), 'payment_verification_error', details))
+		except Exception:
+			pass
+		return jsonify({"status": "error", "message": "Invalid payment request"}), 400
+	except razorpay.errors.ServerError as e:
+		# Log Razorpay server error
+		try:
+			details = json.dumps({
+				"error_type": "razorpay_server_error",
+				"error": str(e),
+				"subscription_id": rz_sub_id,
+				"payment_id": rz_payment_id
+			})
+			execute_primary_query("INSERT INTO audit_logs (org_id, user_id, action, details) VALUES (?, ?, ?, ?)", (getattr(g, 'org_id', None), getattr(g, 'user_id', None), 'payment_verification_error', details))
+		except Exception:
+			pass
+		return jsonify({"status": "error", "message": "Payment service temporarily unavailable"}), 502
 	except Exception as e:
-		return jsonify({"status": "error", "message": "Failed to verify payment", "error": str(e)}), 500
+		# Log unexpected error with full context
+		import traceback
+		error_trace = traceback.format_exc()
+		try:
+			details = json.dumps({
+				"error_type": "unexpected_error",
+				"error": str(e),
+				"error_class": type(e).__name__,
+				"subscription_id": rz_sub_id,
+				"payment_id": rz_payment_id,
+				"trace": error_trace[:1000]  # Limit trace length
+			})
+			execute_primary_query("INSERT INTO audit_logs (org_id, user_id, action, details) VALUES (?, ?, ?, ?)", (getattr(g, 'org_id', None), getattr(g, 'user_id', None), 'payment_verification_critical_error', details))
+		except Exception:
+			pass
+		print(f"[PAYMENT VERIFICATION ERROR] {type(e).__name__}: {e}")
+		print(error_trace)
+		return jsonify({"status": "error", "message": "Failed to verify payment"}), 500
 
 
 @app.route('/api/razorpay/webhooks', methods=['POST'])
+@require_https_payment
+@limiter.limit("100 per minute", key_func=lambda: request.remote_addr)
 def razorpay_webhooks():
 	"""Handle Razorpay webhook events for subscription lifecycle and payments."""
 	if not RAZORPAY_WEBHOOK_SECRET:
@@ -5929,42 +6695,119 @@ def razorpay_webhooks():
 
 	try:
 		if event_type == 'subscription.authenticated':
-			execute_primary_query("UPDATE subscriptions SET status = 'authenticated' WHERE razorpay_subscription_id = ?", (subscription_id,))
+			# Get current status for validation
+			current_sub = execute_primary_query("SELECT status FROM subscriptions WHERE razorpay_subscription_id = ?", (subscription_id,), fetch_one=True)
+			current_status = current_sub[0] if current_sub else None
+			is_valid, error_msg = validate_subscription_transition(org_id, current_status, 'authenticated', context={"event": event_type, "subscription_id": subscription_id})
+			if not is_valid:
+				print(f"[WEBHOOK] Invalid transition attempt: {error_msg}")
+				# Continue anyway for webhook - log but don't block
+			else:
+				execute_primary_query("UPDATE subscriptions SET status = 'authenticated' WHERE razorpay_subscription_id = ?", (subscription_id,))
 		elif event_type == 'subscription.activated':
 			start_at = sub_entity.get('start_at')
-			# Atomic Swap: Activate new plan AND cancel any other 'active' or 'trial' plans for this org
-			try:
-				# 1. Activate the new subscription
-				execute_primary_query("UPDATE subscriptions SET status = 'active', start_date = ? WHERE razorpay_subscription_id = ?", (datetime.fromtimestamp(start_at).strftime('%Y-%m-%d') if start_at else None, subscription_id))
-				
-				# 2. Cancel any OTHER active/trial subscriptions for this org to prevent duplicates
-				# We use the org_id we resolved earlier
-				execute_primary_query(
-					"UPDATE subscriptions SET status = 'cancelled', end_date = ? WHERE org_id = ? AND razorpay_subscription_id != ? AND status IN ('active', 'trial', 'authenticated')",
-					(datetime.now().strftime('%Y-%m-%d'), org_id, subscription_id)
-				)
-				print(f"[WEBHOOK] Atomic swap completed for org {org_id}. New subscription {subscription_id} active.")
-			except Exception as e:
-				print(f"[WEBHOOK] Error during atomic swap: {e}")
+			# Get current status for validation
+			current_sub = execute_primary_query("SELECT status FROM subscriptions WHERE razorpay_subscription_id = ?", (subscription_id,), fetch_one=True)
+			current_status = current_sub[0] if current_sub else None
+			is_valid, error_msg = validate_subscription_transition(org_id, current_status, 'active', context={"event": event_type, "subscription_id": subscription_id})
+			if not is_valid:
+				print(f"[WEBHOOK] Invalid transition attempt: {error_msg}")
+				# Continue anyway for webhook - log but don't block
+			else:
+				# Atomic Swap: Activate new plan AND cancel any other 'active' or 'trial' plans for this org
+				try:
+					# 1. Activate the new subscription
+					execute_primary_query("UPDATE subscriptions SET status = 'active', start_date = ? WHERE razorpay_subscription_id = ?", (datetime.fromtimestamp(start_at).strftime('%Y-%m-%d') if start_at else None, subscription_id))
+					
+					# 2. Cancel any OTHER active/trial subscriptions for this org to prevent duplicates
+					# We use the org_id we resolved earlier
+					# Note: Cancelling other subscriptions is a business rule, not a state transition validation
+					execute_primary_query(
+						"UPDATE subscriptions SET status = 'cancelled', end_date = ? WHERE org_id = ? AND razorpay_subscription_id != ? AND status IN ('active', 'trial', 'authenticated')",
+						(datetime.now().strftime('%Y-%m-%d'), org_id, subscription_id)
+					)
+					print(f"[WEBHOOK] Atomic swap completed for org {org_id}. New subscription {subscription_id} active.")
+				except Exception as e:
+					print(f"[WEBHOOK] Error during atomic swap: {e}")
 		elif event_type == 'subscription.charged':
 			payment_id = pay_entity.get('id')
 			amount = (pay_entity.get('amount', 0) or 0) / 100.0
-			execute_primary_query("INSERT INTO billing_transactions (org_id, razorpay_payment_id, amount, status) VALUES (?, ?, ?, ?)", (org_id, payment_id, amount, 'success'))
-			invalidate_billing_metrics_cache()
+			try:
+				execute_primary_query("INSERT INTO billing_transactions (org_id, razorpay_payment_id, amount, status) VALUES (?, ?, ?, ?)", (org_id, payment_id, amount, 'success'))
+				invalidate_billing_metrics_cache()
+			except mysql.connector.IntegrityError:
+				# Duplicate payment ID - already processed (idempotent)
+				try:
+					details = json.dumps({"org_id": org_id, "payment_id": payment_id, "event": event_type, "reason": "duplicate_payment_idempotent"})
+					execute_primary_query("INSERT INTO audit_logs (org_id, user_id, action, details) VALUES (?, ?, ?, ?)", (org_id, None, 'webhook_duplicate_payment_ignored', details))
+				except Exception:
+					pass
+				# Continue processing - payment already recorded
 		elif event_type == 'subscription.paused':
-			execute_primary_query("UPDATE subscriptions SET status = 'paused' WHERE razorpay_subscription_id = ?", (subscription_id,))
+			current_sub = execute_primary_query("SELECT status FROM subscriptions WHERE razorpay_subscription_id = ?", (subscription_id,), fetch_one=True)
+			current_status = current_sub[0] if current_sub else None
+			is_valid, error_msg = validate_subscription_transition(org_id, current_status, 'paused', context={"event": event_type, "subscription_id": subscription_id})
+			if not is_valid:
+				print(f"[WEBHOOK] Invalid transition attempt: {error_msg}")
+			else:
+				execute_primary_query("UPDATE subscriptions SET status = 'paused' WHERE razorpay_subscription_id = ?", (subscription_id,))
 		elif event_type == 'subscription.cancelled':
 			ended_at = sub_entity.get('ended_at')
-			execute_primary_query("UPDATE subscriptions SET status = 'cancelled', end_date = ? WHERE razorpay_subscription_id = ?", (datetime.fromtimestamp(ended_at).strftime('%Y-%m-%d') if ended_at else None, subscription_id))
+			current_sub = execute_primary_query("SELECT status FROM subscriptions WHERE razorpay_subscription_id = ?", (subscription_id,), fetch_one=True)
+			current_status = current_sub[0] if current_sub else None
+			is_valid, error_msg = validate_subscription_transition(org_id, current_status, 'cancelled', context={"event": event_type, "subscription_id": subscription_id})
+			if not is_valid:
+				print(f"[WEBHOOK] Invalid transition attempt: {error_msg}")
+			else:
+				execute_primary_query("UPDATE subscriptions SET status = 'cancelled', end_date = ? WHERE razorpay_subscription_id = ?", (datetime.fromtimestamp(ended_at).strftime('%Y-%m-%d') if ended_at else None, subscription_id))
 		elif event_type == 'subscription.halted':
-			execute_primary_query("UPDATE subscriptions SET status = 'halted' WHERE razorpay_subscription_id = ?", (subscription_id,))
+			current_sub = execute_primary_query("SELECT status FROM subscriptions WHERE razorpay_subscription_id = ?", (subscription_id,), fetch_one=True)
+			current_status = current_sub[0] if current_sub else None
+			is_valid, error_msg = validate_subscription_transition(org_id, current_status, 'halted', context={"event": event_type, "subscription_id": subscription_id})
+			if not is_valid:
+				print(f"[WEBHOOK] Invalid transition attempt: {error_msg}")
+			else:
+				execute_primary_query("UPDATE subscriptions SET status = 'halted' WHERE razorpay_subscription_id = ?", (subscription_id,))
 		elif event_type == 'subscription.completed':
-			execute_primary_query("UPDATE subscriptions SET status = 'completed' WHERE razorpay_subscription_id = ?", (subscription_id,))
+			current_sub = execute_primary_query("SELECT status FROM subscriptions WHERE razorpay_subscription_id = ?", (subscription_id,), fetch_one=True)
+			current_status = current_sub[0] if current_sub else None
+			is_valid, error_msg = validate_subscription_transition(org_id, current_status, 'completed', context={"event": event_type, "subscription_id": subscription_id})
+			if not is_valid:
+				print(f"[WEBHOOK] Invalid transition attempt: {error_msg}")
+			else:
+				execute_primary_query("UPDATE subscriptions SET status = 'completed' WHERE razorpay_subscription_id = ?", (subscription_id,))
 		elif event_type == 'payment.failed':
 			payment_id = pay_entity.get('id')
 			amount = (pay_entity.get('amount', 0) or 0) / 100.0
-			execute_primary_query("INSERT INTO billing_transactions (org_id, razorpay_payment_id, amount, status) VALUES (?, ?, ?, ?)", (org_id, payment_id, amount, 'failed'))
-			invalidate_billing_metrics_cache()
+			failure_reason = pay_entity.get('error_description') or pay_entity.get('error_code') or 'Payment processing failed'
+			try:
+				execute_primary_query("INSERT INTO billing_transactions (org_id, razorpay_payment_id, amount, status) VALUES (?, ?, ?, ?)", (org_id, payment_id, amount, 'failed'))
+				invalidate_billing_metrics_cache()
+				
+				# Send payment failed email notification
+				try:
+					user_row = execute_primary_query("SELECT u.email, u.name FROM users u JOIN subscriptions s ON u.org_id = s.org_id WHERE s.org_id = ? AND u.role IN ('org_admin', 'super_admin') LIMIT 1", (org_id,), fetch_one=True)
+					if user_row:
+						user_email, user_name = user_row[0], user_row[1]
+						send_payment_failed_email(
+							to_email=user_email,
+							payment_id=payment_id,
+							amount=amount,
+							payment_date=datetime.now().strftime('%Y-%m-%d'),
+							failure_reason=failure_reason,
+							user_name=user_name,
+							org_id=org_id
+						)
+				except Exception as e:
+					print(f"[EMAIL] Failed to send payment failed notification: {e}")
+			except mysql.connector.IntegrityError:
+				# Duplicate payment ID - already processed (idempotent)
+				try:
+					details = json.dumps({"org_id": org_id, "payment_id": payment_id, "event": event_type, "reason": "duplicate_payment_idempotent"})
+					execute_primary_query("INSERT INTO audit_logs (org_id, user_id, action, details) VALUES (?, ?, ?, ?)", (org_id, None, 'webhook_duplicate_payment_ignored', details))
+				except Exception:
+					pass
+				# Continue processing - payment already recorded
 		# Audit log
 		try:
 			details = json.dumps({"org_id": org_id, "event": event_type, "subscription_id": subscription_id, "payment_id": pay_entity.get('id')})
@@ -5981,15 +6824,44 @@ def razorpay_webhooks():
 				execute_primary_query("INSERT OR IGNORE INTO webhook_events (id, received_at) VALUES (?, ?)", (event_id, datetime.now().isoformat()))
 		except Exception:
 			pass
-		return jsonify({"status": "success", "message": "Webhook processed successfully"})
-	except Exception as e:
-		# Return 200 to avoid retries for unknown errors but log them
+		return jsonify({"status": "success", "message": "Webhook processed successfully"}), 200
+	except MySQLError as e:
+		# Database error - retryable, return 500 so Razorpay retries
+		import traceback
+		error_trace = traceback.format_exc()
 		try:
-			details = json.dumps({"org_id": org_id, "event": event_type, "error": str(e)})
-			execute_primary_query("INSERT INTO audit_logs (org_id, user_id, action, details) VALUES (?, ?, ?, ?)", (org_id, None, 'subscription_webhook_error', details))
+			details = json.dumps({
+				"org_id": org_id,
+				"event": event_type,
+				"error_type": "database_error",
+				"error": str(e),
+				"error_class": type(e).__name__,
+				"trace": error_trace[:1000]
+			})
+			execute_primary_query("INSERT INTO audit_logs (org_id, user_id, action, details) VALUES (?, ?, ?, ?)", (org_id, None, 'subscription_webhook_database_error', details))
 		except Exception:
 			pass
-		return jsonify({"status": "success"}), 200
+		print(f"[WEBHOOK] Database error processing webhook: {e}")
+		return jsonify({"status": "error", "message": "Database error processing webhook"}), 500
+	except Exception as e:
+		# Processing error - retryable, return 500 so Razorpay retries
+		import traceback
+		error_trace = traceback.format_exc()
+		try:
+			details = json.dumps({
+				"org_id": org_id,
+				"event": event_type,
+				"error_type": "processing_error",
+				"error": str(e),
+				"error_class": type(e).__name__,
+				"trace": error_trace[:1000]
+			})
+			execute_primary_query("INSERT INTO audit_logs (org_id, user_id, action, details) VALUES (?, ?, ?, ?)", (org_id, None, 'subscription_webhook_processing_error', details))
+		except Exception:
+			pass
+		print(f"[WEBHOOK] Processing error: {e}")
+		print(error_trace)
+		return jsonify({"status": "error", "message": "Error processing webhook"}), 500
 
 
 # --- Subscription & Billing Management ---
@@ -6124,7 +6996,8 @@ def get_organization_subscription():
 				"trial_days_remaining": days_remaining if status == 'trial' else None,
 				"can_upgrade": status in ['active', 'trial'] and plan_type != 'pro',
 				"can_cancel": status in ['active', 'authenticated'],
-				"can_pause": status == 'active' and rz_sub_id is not None
+				"can_pause": status == 'active' and rz_sub_id is not None,
+				"plan_limits": plan_limits
 			},
 			"plan_limits": plan_limits,
 			"current_usage": usage_stats,
@@ -6144,6 +7017,8 @@ def get_organization_subscription():
 
 
 @app.route('/api/org/subscription/upgrade', methods=['POST'])
+@require_https_payment
+@limiter.limit("5 per minute", key_func=get_user_id_for_rate_limit)
 @role_required([ROLE_SUPER_ADMIN, ROLE_ORG_ADMIN])
 def upgrade_subscription():
 	data = request.get_json(silent=True) or {}
@@ -6169,6 +7044,13 @@ def upgrade_subscription():
 		idempotency_key = str(uuid.uuid4())
 	if new_plan_type not in ['basic', 'si_plus', 'plus', 'pro']:
 		return jsonify({"status": "error", "message": "Invalid plan type"}), 400
+	
+	# Validate user_count range (if provided, before deriving from current users)
+	if user_count > 0:
+		if user_count < 1:
+			return jsonify({"status": "error", "message": "User count must be at least 1"}), 400
+		if user_count > MAX_USER_COUNT:
+			return jsonify({"status": "error", "message": f"User count cannot exceed {MAX_USER_COUNT}"}), 400
 
 	# Normalize new_plan_type for plan comparisons and Razorpay plan ID lookup
 	new_plan_type_normalized = normalize_plan_type(new_plan_type)
@@ -6579,6 +7461,8 @@ def upgrade_subscription():
 
 
 @app.route('/api/org/subscription/cancel', methods=['POST'])
+@require_https_payment
+@limiter.limit("10 per minute", key_func=get_user_id_for_rate_limit)
 @role_required([ROLE_SUPER_ADMIN, ROLE_ORG_ADMIN])
 def cancel_subscription():
 	data = request.get_json(silent=True) or {}
@@ -6596,15 +7480,23 @@ def cancel_subscription():
 	if status in ['active','authenticated'] and rz_sub_id and razorpay_client is not None:
 		try:
 			payload = {'cancel_at_cycle_end': 1 if cancel_at_cycle_end else 0}
-			razorpay_client.subscription.cancel(rz_sub_id, payload)
+			razorpay_client.subscription.cancel(rz_sub_id, payload, timeout=10)
 		except Exception as _:
 			pass
 
 	if cancel_at_cycle_end:
+		new_status = 'pending_cancellation'
+		is_valid, error_msg = validate_subscription_transition(org_id, status, new_status, user_id=getattr(g, 'user_id', None), context={"subscription_id": rz_sub_id, "action": "cancel_at_cycle_end"})
+		if not is_valid:
+			return jsonify({"status": "error", "message": error_msg}), 400
 		execute_primary_query("UPDATE subscriptions SET status = 'pending_cancellation' WHERE id = ?", (sub_id,))
 		message = "Subscription will be cancelled at the end of current billing cycle"
 		access_until = None
 	else:
+		new_status = 'cancelled'
+		is_valid, error_msg = validate_subscription_transition(org_id, status, new_status, user_id=getattr(g, 'user_id', None), context={"subscription_id": rz_sub_id, "action": "cancel_immediate"})
+		if not is_valid:
+			return jsonify({"status": "error", "message": error_msg}), 400
 		end_dt = datetime.now().strftime('%Y-%m-%d')
 		execute_primary_query("UPDATE subscriptions SET status = 'cancelled', end_date = ? WHERE id = ?", (end_dt, sub_id))
 		message = "Subscription cancelled immediately. Access will be restricted."
@@ -6623,6 +7515,8 @@ def cancel_subscription():
 
 
 @app.route('/api/razorpay/subscription/abandon', methods=['POST'])
+@require_https_payment
+@limiter.limit("10 per minute", key_func=get_user_id_for_rate_limit)
 @role_required([ROLE_SUPER_ADMIN, ROLE_ORG_ADMIN, ROLE_ORG_USER])
 def abandon_subscription():
     """
@@ -6683,6 +7577,10 @@ def abandon_subscription():
         
         # Only abandon if it's in 'created' state or 'authenticated' (but not active)
         if status in ['created', 'pending']:
+            # Validate transition to 'abandoned'
+            is_valid, error_msg = validate_subscription_transition(org_id, status, 'abandoned', user_id=getattr(g, 'user_id', None), context={"subscription_id": subscription_id, "action": "abandon"})
+            if not is_valid:
+                return jsonify({"status": "error", "message": error_msg}), 400
             try:
                 run_primary_transaction([
                     (
@@ -6723,6 +7621,8 @@ def abandon_subscription():
         print(f"[ABANDON] Error: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 @app.route('/api/org/subscription/pause', methods=['POST'])
+@require_https_payment
+@limiter.limit("10 per minute", key_func=get_user_id_for_rate_limit)
 @role_required([ROLE_SUPER_ADMIN, ROLE_ORG_ADMIN])
 def pause_subscription():
 	if razorpay_client is None:
@@ -6743,6 +7643,10 @@ def pause_subscription():
 
 	try:
 		razorpay_client.subscription.pause(rz_sub_id, {'pause_at': 'now'})
+		# Validate transition to 'paused'
+		is_valid, error_msg = validate_subscription_transition(org_id, status, 'paused', user_id=getattr(g, 'user_id', None), context={"subscription_id": rz_sub_id, "action": "pause"})
+		if not is_valid:
+			return jsonify({"status": "error", "message": error_msg}), 400
 		execute_primary_query("UPDATE subscriptions SET status = 'paused' WHERE id = ?", (sub_id,))
 		# Compute resume date locally based on billing_cycle and pause_duration
 		resume_date = None
@@ -6863,10 +7767,20 @@ def get_billing_history():
 @role_required([ROLE_SUPER_ADMIN, ROLE_ORG_ADMIN])
 def download_invoice(transaction_id):
 	try:
-		trx = execute_primary_query("SELECT id, org_id, razorpay_payment_id, amount, status, created_at FROM billing_transactions WHERE id = ?", (transaction_id,), fetch_one=True)
-		if not trx:
+		trx_row = execute_primary_query("SELECT id, org_id, razorpay_payment_id, amount, status, created_at FROM billing_transactions WHERE id = ?", (transaction_id,), fetch_one=True)
+		if not trx_row:
 			return jsonify({"status": "error", "message": "Transaction not found"}), 404
-		trx = dict_to_row(trx)
+		
+		# Convert tuple to dictionary
+		trx = {
+			'id': trx_row[0],
+			'org_id': trx_row[1],
+			'razorpay_payment_id': trx_row[2],
+			'amount': trx_row[3],
+			'status': trx_row[4],
+			'created_at': trx_row[5]
+		}
+		
 		org_id = trx['org_id']
 		if getattr(g, 'role', None) != ROLE_SUPER_ADMIN and org_id != getattr(g, 'org_id', None):
 			return jsonify({"status": "error", "message": "Forbidden"}), 403
@@ -6883,6 +7797,7 @@ def download_invoice(transaction_id):
 		payment_date = invoice_date
 		plan_row = execute_primary_query("SELECT plan_type, billing_cycle, razorpay_subscription_id FROM subscriptions WHERE org_id = ? ORDER BY id DESC LIMIT 1", (org_id,), fetch_one=True)
 		plan_type = plan_row[0] if plan_row else 'basic'
+		billing_cycle = plan_row[1] if plan_row and len(plan_row) > 1 else 'monthly'
 		plan_display = get_subscription_display_name(plan_type)
 		plan_type_normalized = normalize_plan_type(plan_type)
 		
@@ -6904,69 +7819,113 @@ def download_invoice(transaction_id):
 		extra_user_rate = 500.0  # ₹500 per extra user
 		extra_user_cost = extra_users * extra_user_rate
 		
-		subtotal = round(trx['amount'] or 0, 2)
+		subtotal = round(float(trx['amount'] or 0), 2)
 		# Apply tax only if enabled and configured; otherwise treat stored amount as final gross total
-		gst_amount = round(subtotal * TAX_RATE, 2) if (TAX_ENABLED and TAX_RATE > 0) else 0.0
+		tax_rate_val = float(TAX_RATE) if (TAX_ENABLED and TAX_RATE is not None) else 0.0
+		gst_amount = round(subtotal * tax_rate_val, 2) if tax_rate_val > 0 else 0.0
 		total_amount = round(subtotal + gst_amount, 2)
 
 		buffer = BytesIO()
 		doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=72, leftMargin=72, topMargin=72, bottomMargin=18)
 		elements = []
 		styles = getSampleStyleSheet()
-		title_style = ParagraphStyle('CustomTitle', parent=styles['Heading1'], fontSize=24, textColor=colors.HexColor('#8b5cf6'), alignment=TA_CENTER)
+		# Custom styles
+		title_style = ParagraphStyle('CustomTitle', parent=styles['Heading1'], fontSize=24, textColor=colors.HexColor('#2c3e50'), alignment=TA_RIGHT, spaceAfter=20)
+		header_style = ParagraphStyle('HeaderStyle', parent=styles['Normal'], fontSize=10, textColor=colors.HexColor('#7f8c8d'), alignment=TA_RIGHT)
+		
+		# Logo and Header Table
+		logo_path = os.path.join(app.root_path, 'static', 'logo.png')
+		header_data = []
+		if os.path.exists(logo_path):
+			img = Image(logo_path, width=1.5*inch, height=0.5*inch)
+			img.hAlign = 'LEFT'
+			header_data = [[img, Paragraph("INVOICE", title_style)]]
+		else:
+			header_data = [[Paragraph("PROTON", styles['Heading1']), Paragraph("INVOICE", title_style)]]
+		
+		header_table = Table(header_data, colWidths=[3*inch, 3*inch])
+		header_table.setStyle(TableStyle([
+			('VALIGN', (0,0), (-1,-1), 'TOP'),
+			('ALIGN', (0,0), (0,0), 'LEFT'),
+			('ALIGN', (1,0), (1,0), 'RIGHT'),
+		]))
+		elements.append(header_table)
+		elements.append(Spacer(1, 10))
 
-		elements.append(Paragraph("INVOICE", title_style))
-		elements.append(Spacer(1, 12))
-
-		invoice_data = [
-			['Invoice Number:', invoice_number],
-			['Invoice Date:', str(invoice_date)],
-			['Transaction ID:', trx['razorpay_payment_id']]
+		# Invoice Details (Right Aligned under Title)
+		details_data = [
+			[Paragraph(f"<b>Invoice #:</b> {invoice_number}", header_style)],
+			[Paragraph(f"<b>Date:</b> {str(invoice_date)}", header_style)],
+			[Paragraph(f"<b>Transaction ID:</b> {trx['razorpay_payment_id']}", header_style)]
 		]
-		invoice_table = Table(invoice_data, colWidths=[2*inch, 4*inch])
-		elements.append(invoice_table)
-		elements.append(Spacer(1, 24))
+		details_table = Table(details_data, colWidths=[6*inch])
+		details_table.setStyle(TableStyle([('ALIGN', (0,0), (-1,-1), 'RIGHT')]))
+		elements.append(details_table)
+		elements.append(Spacer(1, 30))
 
+		# Billing Details
 		billing_data = [
-			['Bill To:', 'Bill From:'],
-			[org_name, COMPANY_NAME],
-			[admin_email, COMPANY_FROM_NAME],
-			[f'Org ID: {org_id}', COMPANY_SUPPORT_EMAIL]
+			[Paragraph("<b>Bill To:</b>", styles['Normal']), Paragraph("<b>Bill From:</b>", styles['Normal'])],
+			[Paragraph(f"{org_name}<br/>{org_domain or ''}<br/>{admin_email}", styles['Normal']), 
+			 Paragraph(f"{COMPANY_NAME}<br/>{COMPANY_FROM_NAME}<br/>{COMPANY_SUPPORT_EMAIL}", styles['Normal'])]
 		]
 		billing_table = Table(billing_data, colWidths=[3*inch, 3*inch])
-		elements.append(billing_table)
-		elements.append(Spacer(1, 24))
-
-		# Show breakdown with Base Plan and Extra Users line items
-		transaction_data = [
-			['Description', 'Quantity', 'Unit Price', 'Amount']
-		]
-		
-		# Add base plan line item
-		transaction_data.append([f'{plan_display} (Base Plan)', '1', f'₹{base_price:.2f}', f'₹{base_price:.2f}'])
-		
-		# Add extra users line item if applicable
-		if extra_users > 0:
-			transaction_data.append([f'Extra Users ({extra_users} users)', f'{extra_users}', f'₹{extra_user_rate:.2f}', f'₹{extra_user_cost:.2f}'])
-		# Apply tax only if configured
-		if TAX_ENABLED and TAX_RATE > 0:
-			transaction_data.append([f'Tax ({int(TAX_RATE*100)}%)', '-', '-', f'₹{gst_amount}'])
-			transaction_data.append(['Total', '', '', f'₹{total_amount}'])
-		else:
-			transaction_data.append(['Total', '', '', f'₹{subtotal}'])
-		transaction_table = Table(transaction_data, colWidths=[3*inch, 1*inch, 1.5*inch, 1.5*inch])
-		transaction_table.setStyle(TableStyle([
-			('BACKGROUND', (0, 0), (-1, 0), colors.grey),
-			('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-			('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-			('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-			('FONTSIZE', (0, 0), (-1, 0), 12),
-			('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-			('BACKGROUND', (0, -1), (-1, -1), colors.beige),
-			('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
-			('GRID', (0, 0), (-1, -1), 1, colors.black)
+		billing_table.setStyle(TableStyle([
+			('VALIGN', (0,0), (-1,-1), 'TOP'),
+			('LINEBELOW', (0,0), (-1,0), 1, colors.HexColor('#ecf0f1')),
+			('PADDING', (0,0), (-1,-1), 6),
 		]))
-		elements.append(transaction_table)
+		elements.append(billing_table)
+		elements.append(Spacer(1, 30))
+
+		# Items Table
+		data = [['Description', 'Quantity', 'Unit Price', 'Amount']]
+		# Base Plan Item
+		data.append([
+			f"{plan_display} Subscription ({billing_cycle.title()})",
+			"1",
+			f"Rs. {base_price:,.2f}",
+			f"Rs. {base_price:,.2f}"
+		])
+		
+		# Extra Users Item
+		if extra_users > 0:
+			data.append([
+				f"Additional Users ({extra_users} x Rs. {extra_user_rate})",
+				str(extra_users),
+				f"Rs. {extra_user_rate:,.2f}",
+				f"Rs. {extra_user_cost:,.2f}"
+			])
+			
+		# Total Row Calculation
+		data.append(['', '', 'Subtotal:', f"Rs. {subtotal:,.2f}"])
+		if gst_amount > 0:
+			data.append(['', '', f"GST ({int(tax_rate_val*100)}%):", f"Rs. {gst_amount:,.2f}"])
+		data.append(['', '', 'Total:', f"Rs. {total_amount:,.2f}"])
+
+		t = Table(data, colWidths=[3*inch, 1*inch, 1*inch, 1.5*inch])
+		t.setStyle(TableStyle([
+			('BACKGROUND', (0,0), (-1,0), colors.HexColor('#f8f9fa')),
+			('TEXTCOLOR', (0,0), (-1,0), colors.HexColor('#2c3e50')),
+			('ALIGN', (0,0), (-1,-1), 'LEFT'),
+			('ALIGN', (1,0), (-1,-1), 'CENTER'),   # Qty centered
+			('ALIGN', (2,0), (-1,-1), 'RIGHT'),  # Price right
+			('ALIGN', (3,0), (-1,-1), 'RIGHT'),  # Amount right
+			('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+			('FONTSIZE', (0,0), (-1,-1), 10),
+			('BOTTOMPADDING', (0,0), (-1,-1), 8),
+			('TOPPADDING', (0,0), (-1,-1), 8),
+			('GRID', (0,0), (-1,-2), 0.5, colors.HexColor('#ecf0f1')), # Grid for items
+			('LINEABOVE', (0,-1), (-1,-1), 1, colors.HexColor('#bdc3c7')), # Total line
+			('FONTNAME', (0,-1), (-1,-1), 'Helvetica-Bold'), # Total bold
+			('TEXTCOLOR', (2,-1), (-1,-1), colors.HexColor('#2c3e50')),
+			('BACKGROUND', (0,-1), (-1,-1), colors.HexColor('#f8f9fa')), # Total bg
+		]))
+		elements.append(t)
+		
+		# Footer
+		elements.append(Spacer(1, 40))
+		elements.append(Paragraph("Thank you for your business!", ParagraphStyle('Footer', parent=styles['Normal'], alignment=TA_CENTER, textColor=colors.HexColor('#7f8c8d'))))
 		elements.append(Spacer(1, 24))
 
 		elements.append(Paragraph("Payment Information", styles['Heading2']))
@@ -8104,6 +9063,258 @@ def sa_billing_metrics():
     except Exception as e:
         print(f"/api/superadmin/billing error: {e}")
         return jsonify({"status": "error", "message": "Failed to compute billing metrics"}), 500
+
+
+@app.route('/api/superadmin/payments/reconcile', methods=['POST'])
+@superadmin_required
+def sa_reconcile_payments():
+    """Reconcile payments between Razorpay and database."""
+    try:
+        from utils.payment_reconciliation import reconcile_payments
+        
+        data = request.get_json(silent=True) or {}
+        org_id = data.get('org_id')
+        start_date = data.get('start_date')
+        end_date = data.get('end_date')
+        
+        if razorpay_client is None:
+            return jsonify({"status": "error", "message": "Razorpay not configured"}), 503
+        
+        results = reconcile_payments(
+            org_id=org_id,
+            start_date=start_date,
+            end_date=end_date,
+            razorpay_client=razorpay_client
+        )
+        
+        # Log reconciliation
+        try:
+            details = json.dumps({"org_id": org_id, "start_date": start_date, "end_date": end_date, "discrepancies": results.get("summary", {}).get("discrepancies", 0)})
+            execute_primary_query("INSERT INTO audit_logs (org_id, user_id, action, details) VALUES (?, ?, ?, ?)", (None, g.user_id, 'payment_reconciliation_run', details))
+        except Exception:
+            pass
+        
+        return jsonify(results)
+    except Exception as e:
+        print(f"/api/superadmin/payments/reconcile error: {e}")
+        return jsonify({"status": "error", "message": "Reconciliation failed"}), 500
+
+
+@app.route('/api/superadmin/payments/retry-failed', methods=['POST'])
+@superadmin_required
+def sa_retry_failed_payments():
+    """Manually trigger retry for failed payments."""
+    try:
+        from utils.payment_retry import PaymentRetryManager, retry_failed_payments
+        
+        # Get payments ready for retry
+        ready_payments = PaymentRetryManager.get_failed_payments_ready_for_retry()
+        
+        if not ready_payments:
+            return jsonify({
+                "status": "success",
+                "message": "No payments ready for retry",
+                "retried_count": 0
+            })
+        
+        # Execute retry logic
+        results = retry_failed_payments(ready_payments, razorpay_client)
+        
+        # Log retry execution
+        try:
+            details = json.dumps({
+                "retried_count": results.get("retried_count", 0),
+                "success_count": results.get("success_count", 0),
+                "failed_count": results.get("failed_count", 0)
+            })
+            execute_primary_query(
+                "INSERT INTO audit_logs (org_id, user_id, action, details) VALUES (?, ?, ?, ?)",
+                (None, g.user_id, 'payment_retry_execution', details)
+            )
+        except Exception:
+            pass
+        
+        return jsonify(results)
+    except Exception as e:
+        print(f"/api/superadmin/payments/retry-failed error: {e}")
+        return jsonify({"status": "error", "message": "Payment retry failed"}), 500
+
+
+@app.route('/api/superadmin/monitoring', methods=['GET'])
+@superadmin_required
+def sa_monitoring_dashboard():
+    """Comprehensive monitoring dashboard data."""
+    try:
+        # System health metrics
+        active_subs = execute_primary_query("SELECT COUNT(*) FROM subscriptions WHERE status = 'active'", fetch_one=True)
+        active_subs_count = active_subs[0] if active_subs else 0
+        
+        # Payment metrics (last 24 hours)
+        last_24h = (datetime.now() - timedelta(hours=24)).strftime('%Y-%m-%d %H:%M:%S')
+        recent_payments = execute_primary_query(
+            "SELECT COUNT(*), SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) FROM billing_transactions WHERE created_at >= ?",
+            (last_24h,),
+            fetch_one=True
+        )
+        total_recent = recent_payments[0] if recent_payments else 0
+        success_recent = recent_payments[1] if recent_payments and len(recent_payments) > 1 else 0
+        
+        # Error rates
+        error_logs_24h = execute_primary_query(
+            "SELECT COUNT(*) FROM audit_logs WHERE action IN ('payment_verification_critical_error', 'subscription_webhook_processing_error', 'subscription_webhook_database_error') AND timestamp >= ?",
+            (last_24h,),
+            fetch_one=True
+        )
+        error_count = error_logs_24h[0] if error_logs_24h else 0
+        
+        # Fraud alerts (last 24 hours)
+        fraud_alerts = execute_primary_query(
+            "SELECT COUNT(*) FROM audit_logs WHERE action = 'fraud_analysis' AND JSON_EXTRACT(details, '$.fraud_score') >= 50 AND timestamp >= ?",
+            (last_24h,),
+            fetch_one=True
+        )
+        fraud_count = fraud_alerts[0] if fraud_alerts else 0
+        
+        # Rate limit hits
+        rate_limit_hits = execute_primary_query(
+            "SELECT COUNT(*) FROM audit_logs WHERE action LIKE '%rate_limit%' AND timestamp >= ?",
+            (last_24h,),
+            fetch_one=True
+        )
+        rate_limit_count = rate_limit_hits[0] if rate_limit_hits else 0
+        
+        # Recent security incidents
+        security_incidents = execute_primary_query(
+            "SELECT action, COUNT(*) as cnt FROM audit_logs WHERE action IN ('payment_amount_mismatch_security_incident', 'subscription_invalid_transition_attempt', 'subscription_cross_org_verification_attempt') AND timestamp >= ? GROUP BY action",
+            (last_24h,),
+            fetch_all=True
+        )
+        incidents = {}
+        if security_incidents:
+            for row in security_incidents:
+                incidents[row[0]] = row[1]
+        
+        return jsonify({
+            "status": "success",
+            "metrics": {
+                "subscriptions": {
+                    "active": active_subs_count
+                },
+                "payments_24h": {
+                    "total": total_recent,
+                    "successful": success_recent,
+                    "success_rate": round((success_recent / total_recent * 100) if total_recent > 0 else 0, 2)
+                },
+                "errors_24h": {
+                    "count": error_count,
+                    "rate": round((error_count / total_recent * 100) if total_recent > 0 else 0, 2)
+                },
+                "fraud_alerts_24h": fraud_count,
+                "rate_limit_hits_24h": rate_limit_count,
+                "security_incidents": incidents
+            },
+            "timestamp": datetime.now().isoformat()
+        })
+    except Exception as e:
+        print(f"/api/superadmin/monitoring error: {e}")
+        return jsonify({"status": "error", "message": "Failed to fetch monitoring data"}), 500
+
+
+@app.route('/api/superadmin/analytics/payments', methods=['GET'])
+@superadmin_required
+def sa_payment_analytics():
+    """Enhanced payment analytics dashboard."""
+    try:
+        end_date = request.args.get('end_date') or datetime.now().strftime('%Y-%m-%d')
+        start_date = request.args.get('start_date') or (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
+        
+        # Revenue trends
+        revenue_trends = get_revenue_by_period(start_date, end_date, group_by='day')
+        
+        # Payment method distribution (if available in future)
+        # For now, all are Razorpay
+        
+        # Success rate by day
+        if DB_TYPE.lower() == "mysql":
+            success_rate_query = """
+                SELECT DATE(created_at) as day,
+                       COUNT(*) as total,
+                       SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) as successful
+                FROM billing_transactions
+                WHERE DATE(created_at) BETWEEN ? AND ?
+                GROUP BY DATE(created_at)
+                ORDER BY day
+            """
+        else:
+            success_rate_query = """
+                SELECT date(created_at) as day,
+                       COUNT(*) as total,
+                       SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) as successful
+                FROM billing_transactions
+                WHERE date(created_at) BETWEEN ? AND ?
+                GROUP BY date(created_at)
+                ORDER BY day
+            """
+        
+        success_rates = execute_primary_query(success_rate_query, (start_date, end_date), fetch_all=True)
+        success_rate_data = []
+        if success_rates:
+            for row in success_rates:
+                total = row[1] or 0
+                successful = row[2] or 0
+                success_rate_data.append({
+                    "date": row[0],
+                    "total": total,
+                    "successful": successful,
+                    "rate": round((successful / total * 100) if total > 0 else 0, 2)
+                })
+        
+        # Average transaction value trend
+        avg_tx_trend = []
+        for day_data in revenue_trends:
+            day = day_data["period"]
+            revenue = day_data["revenue"]
+            # Get count for that day
+            count_row = execute_primary_query(
+                "SELECT COUNT(*) FROM billing_transactions WHERE DATE(created_at) = ? AND status = 'success'",
+                (day,),
+                fetch_one=True
+            )
+            count = count_row[0] if count_row else 0
+            avg_tx_trend.append({
+                "date": day,
+                "avg_transaction": round(revenue / count, 2) if count > 0 else 0
+            })
+        
+        # Churn analysis
+        churn_rate = calculate_churn_rate(start_date, end_date)
+        
+        # Customer lifetime value (simplified)
+        clv_rows = execute_primary_query(
+            "SELECT org_id, SUM(amount) as total_revenue, COUNT(*) as transaction_count FROM billing_transactions WHERE status = 'success' AND DATE(created_at) BETWEEN ? AND ? GROUP BY org_id",
+            (start_date, end_date),
+            fetch_all=True
+        )
+        avg_clv = 0
+        if clv_rows:
+            total_clv = sum(float(row[1] or 0) for row in clv_rows)
+            avg_clv = round(total_clv / len(clv_rows), 2) if clv_rows else 0
+        
+        return jsonify({
+            "status": "success",
+            "period": {"start_date": start_date, "end_date": end_date},
+            "revenue_trends": revenue_trends,
+            "success_rates": success_rate_data,
+            "avg_transaction_trend": avg_tx_trend,
+            "churn_rate": churn_rate,
+            "customer_metrics": {
+                "avg_clv": avg_clv,
+                "total_customers": len(clv_rows) if clv_rows else 0
+            }
+        })
+    except Exception as e:
+        print(f"/api/superadmin/analytics/payments error: {e}")
+        return jsonify({"status": "error", "message": "Failed to fetch analytics"}), 500
 
 
 @app.route('/api/superadmin/users', methods=['GET'])
@@ -11641,6 +12852,7 @@ def save_data():
 @tenant_required
 @role_required([ROLE_SUPER_ADMIN, ROLE_ORG_ADMIN])
 @subscription_required
+@check_plan_limit(RESOURCE_TYPE_FILE)
 def upload_csv():
     """
     Upload and import tasks from a CSV file into an existing project.
@@ -12815,6 +14027,62 @@ def signal_handler(signum, frame):
 signal.signal(signal.SIGTERM, signal_handler)
 signal.signal(signal.SIGINT, signal_handler)
 
+# Background scheduler for automatic payment retries
+scheduler = None
+
+def setup_payment_retry_scheduler():
+    """Set up APScheduler for automatic payment retry execution."""
+    global scheduler
+    
+    if not APSCHEDULER_AVAILABLE:
+        print("Warning: APScheduler not available. Automatic payment retries will not run.")
+        print("Install with: pip install apscheduler")
+        return
+    
+    try:
+        from utils.payment_retry import PaymentRetryManager, retry_failed_payments
+        
+        scheduler = BackgroundScheduler()
+        
+        def execute_automatic_retry():
+            """Scheduled job to automatically retry failed payments."""
+            try:
+                if razorpay_client is None:
+                    return
+                
+                ready_payments = PaymentRetryManager.get_failed_payments_ready_for_retry()
+                if ready_payments:
+                    print(f"[SCHEDULER] Found {len(ready_payments)} payments ready for retry")
+                    results = retry_failed_payments(ready_payments, razorpay_client)
+                    print(f"[SCHEDULER] Retry completed: {results.get('success_count', 0)} succeeded, {results.get('failed_count', 0)} failed")
+            except Exception as e:
+                print(f"[SCHEDULER] Error in automatic payment retry: {e}")
+        
+        # Schedule to run daily at 2 AM
+        scheduler.add_job(
+            execute_automatic_retry,
+            trigger=CronTrigger(hour=2, minute=0),
+            id='payment_retry_job',
+            name='Automatic Payment Retry',
+            replace_existing=True
+        )
+        
+        scheduler.start()
+        print("✓ Payment retry scheduler started (runs daily at 2 AM)")
+        
+    except Exception as e:
+        print(f"Error setting up payment retry scheduler: {e}")
+
+def cleanup_scheduler():
+    """Stop the scheduler on shutdown."""
+    global scheduler
+    if scheduler and scheduler.running:
+        scheduler.shutdown()
+        print("Payment retry scheduler stopped")
+
+# Register cleanup
+atexit.register(cleanup_scheduler)
+
 
 if __name__ == '__main__':
     # When debug=True, Flask uses a reloader which spawns a child process.
@@ -12824,11 +14092,15 @@ if __name__ == '__main__':
     if os.environ.get("WERKZEUG_RUN_MAIN") == "true":
         # initialize_database()  # REMOVED: Legacy single-tenant DB no longer needed in multi-tenant architecture
         initialize_primary_database()
+        migrate_schema_versioning()  # Create schema_migrations table first (must run before other migrations)
         migrate_users_table_for_auth_features()
         auto_create_superadmin_from_env()  # Auto-create SuperAdmin from environment credentials when configured
         # seed_super_admin()  # DISABLED: Use /api/superadmin/signup endpoint instead
         migrate_plan_limits_to_new_pricing()  # Migrate existing databases to new pricing structure
         migrate_organizations_table_for_tour()  # Add tour_seen column to organizations table
+        migrate_billing_transactions_unique_constraint()  # Add UNIQUE constraint on razorpay_payment_id
+        migrate_billing_transactions_retry_tracking()  # Add retry_attempts and last_retry_at columns
         seed_plan_limits()
+        setup_payment_retry_scheduler()  # Set up automatic payment retry scheduler
     
     app.run(debug=True, host='0.0.0.0', port=5125)

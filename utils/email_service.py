@@ -235,10 +235,155 @@ def send_password_reset_email(
     )
 
 
+def send_payment_success_email(
+    to_email: str,
+    payment_id: str,
+    amount: float,
+    plan_type: str,
+    billing_cycle: str,
+    payment_date: str,
+    user_name: Optional[str] = None,
+    *,
+    org_id: Optional[int] = None,
+    user_id: Optional[int] = None,
+) -> Tuple[bool, Optional[str]]:
+    """
+    Send a payment success email notification.
+    """
+    from datetime import datetime
+    context = {
+        "USER_NAME": user_name or "Customer",
+        "PAYMENT_ID": payment_id,
+        "AMOUNT": f"{amount:.2f}",
+        "PLAN_TYPE": plan_type.upper(),
+        "BILLING_CYCLE": billing_cycle.capitalize(),
+        "PAYMENT_DATE": payment_date,
+        "CURRENT_YEAR": str(datetime.now().year),
+    }
+    success, html_body, error = render_email_template("payment_success.html", context)
+    if not success or not html_body:
+        log_email_audit(
+            "email_failed",
+            to_email,
+            "Payment Successful - PROTON",
+            "payment_success",
+            error,
+            org_id=org_id,
+            user_id=user_id,
+        )
+        return False, error
+
+    return send_email(
+        to_email=to_email,
+        subject="Payment Successful - PROTON Subscription",
+        html_body=html_body,
+        email_type="payment_success",
+        org_id=org_id,
+        user_id=user_id,
+    )
+
+
+def send_payment_failed_email(
+    to_email: str,
+    payment_id: str,
+    amount: float,
+    payment_date: str,
+    failure_reason: str,
+    dashboard_url: str = "https://protonv5.simonindia.ai/dashboard",
+    user_name: Optional[str] = None,
+    *,
+    org_id: Optional[int] = None,
+    user_id: Optional[int] = None,
+) -> Tuple[bool, Optional[str]]:
+    """
+    Send a payment failed email notification.
+    """
+    from datetime import datetime
+    context = {
+        "USER_NAME": user_name or "Customer",
+        "PAYMENT_ID": payment_id,
+        "AMOUNT": f"{amount:.2f}",
+        "PAYMENT_DATE": payment_date,
+        "FAILURE_REASON": failure_reason,
+        "DASHBOARD_URL": dashboard_url,
+        "CURRENT_YEAR": str(datetime.now().year),
+    }
+    success, html_body, error = render_email_template("payment_failed.html", context)
+    if not success or not html_body:
+        log_email_audit(
+            "email_failed",
+            to_email,
+            "Payment Failed - PROTON",
+            "payment_failed",
+            error,
+            org_id=org_id,
+            user_id=user_id,
+        )
+        return False, error
+
+    return send_email(
+        to_email=to_email,
+        subject="Payment Failed - PROTON Subscription",
+        html_body=html_body,
+        email_type="payment_failed",
+        org_id=org_id,
+        user_id=user_id,
+    )
+
+
+def send_subscription_activated_email(
+    to_email: str,
+    plan_type: str,
+    billing_cycle: str,
+    start_date: str,
+    next_billing_date: Optional[str] = None,
+    user_name: Optional[str] = None,
+    *,
+    org_id: Optional[int] = None,
+    user_id: Optional[int] = None,
+) -> Tuple[bool, Optional[str]]:
+    """
+    Send a subscription activated email notification.
+    """
+    from datetime import datetime
+    context = {
+        "USER_NAME": user_name or "Customer",
+        "PLAN_TYPE": plan_type.upper(),
+        "BILLING_CYCLE": billing_cycle.capitalize(),
+        "START_DATE": start_date,
+        "NEXT_BILLING_DATE": next_billing_date or "N/A",
+        "CURRENT_YEAR": str(datetime.now().year),
+    }
+    success, html_body, error = render_email_template("subscription_activated.html", context)
+    if not success or not html_body:
+        log_email_audit(
+            "email_failed",
+            to_email,
+            "Welcome to PROTON - Subscription Activated",
+            "subscription_activated",
+            error,
+            org_id=org_id,
+            user_id=user_id,
+        )
+        return False, error
+
+    return send_email(
+        to_email=to_email,
+        subject="Welcome to PROTON - Your Subscription is Active",
+        html_body=html_body,
+        email_type="subscription_activated",
+        org_id=org_id,
+        user_id=user_id,
+    )
+
+
 __all__ = [
     "send_email",
     "send_otp_email",
     "send_password_reset_email",
+    "send_payment_success_email",
+    "send_payment_failed_email",
+    "send_subscription_activated_email",
     "render_email_template",
 ]
 

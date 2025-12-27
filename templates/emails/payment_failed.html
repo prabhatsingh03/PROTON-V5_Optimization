@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Payment Failed - PROTON</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: Arial, Helvetica, sans-serif;
+            background-color: #f4f6fb;
+            color: #1f2937;
+        }
+        .wrapper {
+            width: 100%;
+            background-color: #f4f6fb;
+            padding: 24px 0;
+        }
+        .card {
+            max-width: 600px;
+            margin: 0 auto;
+            background-color: #ffffff;
+            border-radius: 12px;
+            box-shadow: 0 8px 24px rgba(31, 41, 55, 0.1);
+            overflow: hidden;
+        }
+        .header {
+            background: linear-gradient(135deg, #dc2626, #ef4444);
+            padding: 32px;
+            text-align: center;
+            color: #ffffff;
+        }
+        .header h1 {
+            margin: 0;
+            font-size: 24px;
+            letter-spacing: 0.05em;
+        }
+        .content {
+            padding: 32px;
+        }
+        .greeting {
+            margin: 0 0 16px;
+            font-size: 18px;
+            font-weight: 600;
+        }
+        .message {
+            margin: 0 0 24px;
+            line-height: 1.6;
+        }
+        .alert {
+            background-color: #fef2f2;
+            border: 1px solid #fecaca;
+            border-radius: 10px;
+            padding: 16px;
+            font-size: 14px;
+            color: #991b1b;
+            line-height: 1.5;
+            margin: 16px 0 24px;
+        }
+        .action-button {
+            display: inline-block;
+            background: linear-gradient(135deg, #1d4ed8, #2563eb);
+            color: #ffffff;
+            padding: 12px 24px;
+            border-radius: 8px;
+            text-decoration: none;
+            font-weight: 600;
+            margin: 16px 0;
+        }
+        .footer {
+            padding: 24px 32px 32px;
+            font-size: 14px;
+            color: #6b7280;
+            line-height: 1.5;
+        }
+        .footer a {
+            color: #2563eb;
+            text-decoration: none;
+        }
+        @media (max-width: 600px) {
+            .card {
+                margin: 0 16px;
+            }
+            .content, .footer {
+                padding: 24px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="wrapper">
+        <div class="card">
+            <div class="header">
+                <h1>⚠ Payment Failed</h1>
+                <p style="margin: 8px 0 0; font-size: 14px; letter-spacing: 0.1em;">PROTON Subscription</p>
+            </div>
+            <div class="content">
+                <p class="greeting">Hello {{USER_NAME}},</p>
+                <p class="message">
+                    We were unable to process your payment for your PROTON subscription. Your subscription access may be restricted until payment is successful.
+                </p>
+                <div class="alert">
+                    <strong>Payment ID:</strong> {{PAYMENT_ID}}<br>
+                    <strong>Amount:</strong> ₹{{AMOUNT}}<br>
+                    <strong>Date:</strong> {{PAYMENT_DATE}}<br>
+                    <strong>Reason:</strong> {{FAILURE_REASON}}
+                </div>
+                <p class="message">
+                    Please update your payment method or contact your bank to resolve this issue. You can retry the payment from your subscription dashboard.
+                </p>
+                <div style="text-align: center;">
+                    <a href="{{DASHBOARD_URL}}" class="action-button">Update Payment Method</a>
+                </div>
+            </div>
+            <div class="footer">
+                <p>Best regards,<br><strong>The PROTON Team</strong></p>
+                <p>Need help? Contact us at <a href="mailto:support@proton.com">support@proton.com</a></p>
+                <p style="margin-top: 16px; font-size: 12px;">© {{CURRENT_YEAR}} PROTON. All rights reserved.</p>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
+
